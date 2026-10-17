@@ -456,7 +456,8 @@ local function drawVerwSettingsSpkUI()
     term.setCursorPos(startX, 10)
     term.setBackgroundColor(colors.black)
     term.setTextColor(colors.white)
-    term.write(string.format("Alarm-Vol: %d%%", spkCfg.editAlarmVolPct))
+    local vol = spkCfg.editAlarmVol or 100
+    term.write(string.format("Alarm-Vol: %d%%", vol))
     addButton("spk_vol_dec", startX + 16, 10, 5, "-10%", colors.gray)
     addButton("spk_vol_inc", startX + 22, 10, 5, "+10%", colors.gray)
 
@@ -787,9 +788,9 @@ local function handleAction(id)
     elseif id == "nav_verw_settings_signs" then viewMode = "verw_settings_signs"; scrollOffset = 0
     elseif id == "nav_verw_settings_gps" then viewMode = "verw_settings_gps"; scrollOffset = 0
     elseif id == "nav_verw_settings_spk" then
-        spkCfg.editEmergencyUrl = spkCfg.emergencyUrl
-        spkCfg.editLockdownUrl  = spkCfg.lockdownUrl
-        spkCfg.editAlarmVolPct  = spkCfg.alarmVolPct
+        spkCfg.editEmergencyUrl = spkCfg.emergencyUrl or ""
+        spkCfg.editLockdownUrl  = spkCfg.lockdownUrl or ""
+        spkCfg.editAlarmVol     = spkCfg.alarmVol or 100
         viewMode = "verw_settings_spk"
         scrollOffset = 0
     elseif id == "nav_sign_blink" then
@@ -901,22 +902,23 @@ local function handleAction(id)
             spkCfg.editLockdownUrl = val
         end
     elseif id == "spk_vol_dec" then
-        spkCfg.editAlarmVolPct = math.max(0, spkCfg.editAlarmVolPct - 10)
+        spkCfg.editAlarmVol = math.max(0, (spkCfg.editAlarmVol or 100) - 10)
     elseif id == "spk_vol_inc" then
-        spkCfg.editAlarmVolPct = math.min(100, spkCfg.editAlarmVolPct + 10)
+        spkCfg.editAlarmVol = math.min(100, (spkCfg.editAlarmVol or 100) + 10)
     elseif id == "spk_send_alarm" then
-        spkCfg.emergencyUrl = spkCfg.editEmergencyUrl
-        spkCfg.lockdownUrl  = spkCfg.editLockdownUrl
-        spkCfg.alarmVolPct  = spkCfg.editAlarmVolPct
+        spkCfg.emergencyUrl = spkCfg.editEmergencyUrl or ""
+        spkCfg.lockdownUrl  = spkCfg.editLockdownUrl or ""
+        spkCfg.alarmVol     = spkCfg.editAlarmVol or 100
         saveMasterConfig()
         rednet.broadcast({
             action       = "set_alarm_config",
             emergencyUrl = spkCfg.emergencyUrl,
             lockdownUrl  = spkCfg.lockdownUrl,
-            alarmVolPct  = spkCfg.alarmVolPct,
+            alarmVol     = spkCfg.alarmVol,
+            alarmVolPct  = spkCfg.alarmVol,
             isReply      = false
         }, CONFIG_PROTOCOL_SPK)
-        addLog(0, true, string.format("Sende Speaker-Alarm-Sync (Vol:%d%%)", spkCfg.alarmVolPct), "Master", "Master", nil)
+        addLog(0, true, string.format("Sende Speaker-Alarm-Sync (Vol:%d%%)", spkCfg.alarmVol), "Master", "Master", nil)
         addDebugMsg("Gespeichert und an alle Speaker gesendet.")
 
     elseif id == "toggle_sign_split" then
@@ -1015,9 +1017,10 @@ local function main()
                 elseif protocol == CONFIG_PROTOCOL_SPK and message.action == "request_speaker_sync" then
                     rednet.send(id, {
                         action       = "set_alarm_config",
-                        emergencyUrl = spkCfg.emergencyUrl,
-                        lockdownUrl  = spkCfg.lockdownUrl,
-                        alarmVolPct  = spkCfg.alarmVolPct,
+                        emergencyUrl = spkCfg.emergencyUrl or "",
+                        lockdownUrl  = spkCfg.lockdownUrl or "",
+                        alarmVol     = spkCfg.alarmVol or 100,
+                        alarmVolPct  = spkCfg.alarmVol or 100,
                         isReply      = true
                     }, CONFIG_PROTOCOL_SPK)
                 end

@@ -1,5 +1,6 @@
 # Changelog
 
+- **2026-10-17** (`programme/MasterComputer/startup.lua`, `backups/MasterComputer/startup.lua`): Bugfix bei der Lautsprecher-Einstellungsanzeige (`spkCfg.alarmVol` vs. `alarmVolPct`-Schreibweise behoben und Fallbacks ergänzt, um Absturz bei Zeile 459 zu verhindern).
 - **2026-10-17** (`programme/Lautsprecher/startup.lua`, `programme/MasterComputer/startup.lua`, `installer.lua`, `roles/Lautsprecher.txt`, `docs/*`): Neue Rolle `Lautsprecher` für YouTube-Audio-Streaming (inkl. ungelisteter Videos via direkter 11-Zeichen-ID-Extraktion), 4 Trigger-Modi (`MANUELL`, `REDSTONE`, `SPIELER`, `FUNK`) und automatischer Emergency-/Lockdown-Alarm-Übersteuerung erstellt. Im `MasterComputer` um Geräteliste (`LAUTSPRECHER`), 1-Klick-Update (`UPDATE: SPEAKER`) und zentrale Alarm-Konfiguration (`EINSTELLUNGEN -> LAUTSPRECHER`) ergänzt.
 - **2026-10-17** (`installer.lua`): `update.lua` in `installer.lua` umbenannt (für kürzeren `wget`-Befehl und Start über `installer`).
 - **2026-10-17** (`programme/*/startup.lua`, `installer.lua`, `backups/*`): Umstieg von Pastebin auf direkte GitHub-Updates (inkl. 1-Klick-Updates & Selbst-Update im `MasterComputer` sowie interaktivem Bunker-Installer in `installer.lua`). Vorab-Backup aller 5 Original-Skripte unter `backups/<Rolle>/startup.lua` angelegt.
