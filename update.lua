@@ -4,7 +4,7 @@
 --
 -- WICHTIG: BASE unten einmal auf dein Repo anpassen.
 
-local BASE = "https://raw.githubusercontent.com/DEIN_USER/DEIN_REPO/main/"
+local BASE = "https://raw.githubusercontent.com/LuaLuggas/CCTweaked-VisualStudioCode-PRoject-AI-Agent/main/"
 
 local args = { ... }
 local rolle = args[1]
