@@ -15,11 +15,13 @@ local ROLES = {
     { key = "2", id = "EmergencyTerminal", title = "2: EmergencyTerminal", path = "programme/EmergencyTerminal/startup.lua" },
     { key = "3", id = "Tuersensor",        title = "3: Tuersensor",        path = "programme/Tuersensor/startup.lua" },
     { key = "4", id = "TextAnzeige",       title = "4: TextAnzeige",       path = "programme/TextAnzeige/startup.lua" },
-    { key = "5", id = "GPSHost",           title = "5: GPSHost",           path = "programme/GPSHost/startup.lua" }
+    { key = "5", id = "GPSHost",           title = "5: GPSHost",           path = "programme/GPSHost/startup.lua" },
+    { key = "6", id = "Lautsprecher",      title = "6: Lautsprecher",      path = "programme/Lautsprecher/startup.lua" },
+    { key = "7", id = "RadioHost",         title = "7: RadioHost",         path = "programme/RadioHost/startup.lua" }
 }
 
 local buttons = {}
-local statusText = "Rolle per Klick oder Taste 1-5 waehlen"
+local statusText = "Rolle per Klick oder Taste 1-7 waehlen"
 local statusCol  = colors.lightGray
 
 local function fetchFile(repoPath)
@@ -121,6 +123,8 @@ local function findRoleByArg(arg)
     elseif clean == "tuer" or clean == "tuersensor" or clean == "doors" or clean == "door" then return ROLES[3]
     elseif clean == "anzeige" or clean == "textanzeige" or clean == "signs" or clean == "sign" then return ROLES[4]
     elseif clean == "gps" or clean == "gpshost" then return ROLES[5]
+    elseif clean == "lautsprecher" or clean == "speaker" or clean == "speakers" then return ROLES[6]
+    elseif clean == "radio" or clean == "radiohost" then return ROLES[7]
     end
     return nil
 end
@@ -162,11 +166,11 @@ local function drawMenu()
     local btnX = math.floor((w - btnW) / 2) + 1
 
     for i, r in ipairs(ROLES) do
-        local y = 3 + (i * 2)
+        local y = 2 + (i * 2)
         addButton(r.key, btnX, y, btnW, r.title, colors.gray, colors.white)
     end
 
-    local quitY = math.min(h - 2, 15)
+    local quitY = math.min(h - 1, 18)
     addButton("quit", btnX, quitY, btnW, "ABBRECHEN [Q]", colors.lightGray, colors.black)
 
     term.setBackgroundColor(colors.black)
@@ -176,13 +180,13 @@ local function drawMenu()
     term.write(stText)
 end
 
--- 1. Direkt-Modus per Startargument (z. B. "update TextAnzeige" oder "update 4")
+-- 1. Direkt-Modus per Startargument (z. B. "installer Lautsprecher" oder "installer 6")
 local args = { ... }
 if args[1] then
     local roleObj = findRoleByArg(args[1])
     if not roleObj then
         printError("Unbekannte Rolle: " .. tostring(args[1]))
-        print("Verfuegbar: MasterComputer, EmergencyTerminal, Tuersensor, TextAnzeige, GPSHost (oder 1-5)")
+        print("Verfuegbar: MasterComputer, EmergencyTerminal, Tuersensor, TextAnzeige, GPSHost, Lautsprecher, RadioHost (oder 1-7)")
         return
     end
     print("Installiere Rolle: " .. roleObj.id .. " ...")

@@ -14,6 +14,7 @@ local CFG = {
     UPDATE_PROTOCOL   = "speaker_update",
     CONFIG_PROTOCOL   = "speaker_config",
     TRIGGER_PROTOCOL  = "speaker_trigger",
+    STREAM_PROTOCOL   = "bunker_radio_stream",
 
     CONFIG_FILE = "speaker_config.txt",
     TEMP_FILE   = "startup.update_tmp",
@@ -65,6 +66,8 @@ local state = {
     alarmVolumePct  = 100,
     radioPlaylist   = {},
     radioTrackIdx   = 1,
+    curRadioTrackIdx = 1,
+    curRadioTitle   = "",
     marqueeOffset   = 0,
 
     -- Update-Historie
@@ -304,12 +307,14 @@ local function getPreviewString()
     local modeName = CFG.MODES[state.triggerMode] or "MANUELL"
     local songInfo = "Kein Video"
     if modeName == "RADIO" then
-        if type(state.radioPlaylist) == "table" and #state.radioPlaylist > 0 then
+        if state.curRadioTitle and state.curRadioTitle ~= "" then
+            songInfo = state.curRadioTitle
+        elseif type(state.radioPlaylist) == "table" and #state.radioPlaylist > 0 then
             local curIdx = math.max(1, math.min(#state.radioPlaylist, state.radioTrackIdx or 1))
             local trk = state.radioPlaylist[curIdx]
             songInfo = (trk and trk.title and not state.isBadTitle(trk.title, trk.id)) and trk.title or "Radio-Track"
         else
-            songInfo = "Keine Playlist"
+            songInfo = "Bunker-Radio"
         end
     elseif state.localVideoId ~= "" then
         songInfo = (not state.isBadTitle(state.localTitle, state.localVideoId)) and state.localTitle or "YouTube-Video"
@@ -429,13 +434,7 @@ local function getDesiredPlayback()
     elseif mode == "FUNK" then
         shouldPlay = state.remoteTriggered
     elseif mode == "RADIO" then
-        if type(state.radioPlaylist) == "table" and #state.radioPlaylist > 0 then
-            local idx = math.max(1, math.min(#state.radioPlaylist, state.radioTrackIdx or 1))
-            local item = state.radioPlaylist[idx]
-            if item and item.id and item.id ~= "" then
-                return item.id, vol, false
-            end
-        end
+        -- Radio-Stream laeuft synchron ueber den zentralen RadioHost per Rednet (DFPWM Chunks)
         return nil, 0, false
     end
 
@@ -706,9 +705,12 @@ local function drawUI()
     elseif state.audioError then
         term.setTextColor(colors.red)
         term.write("FEHLER: " .. tostring(state.audioError):sub(1, w - 18))
+    elseif isRadioMode then
+        term.setTextColor(colors.lime)
+        term.write("EMPFANG (BUNKER-RADIO)")
     elseif state.activeTargetId then
         term.setTextColor(colors.lime)
-        term.write(isRadioMode and "SPIELT (BUNKER-RADIO)" or ("SPIELT (" .. modeName .. ")"))
+        term.write("SPIELT (" .. modeName .. ")")
     else
         term.setTextColor(colors.green)
         term.write("BEREIT (" .. tostring(#state.speakers) .. " Speaker)")
@@ -720,18 +722,18 @@ local function drawUI()
         term.setBackgroundColor(colors.black)
         term.setTextColor(colors.cyan)
         term.write("BUNKER-RADIO:")
+        local curIdx = state.curRadioTrackIdx or state.radioTrackIdx or 1
         if type(state.radioPlaylist) == "table" and #state.radioPlaylist > 0 then
-            local curIdx = math.max(1, math.min(#state.radioPlaylist, state.radioTrackIdx or 1))
+            curIdx = math.max(1, math.min(#state.radioPlaylist, curIdx))
             term.setTextColor(colors.white)
             term.write(string.format(" Track %d/%d", curIdx, #state.radioPlaylist))
         else
-            term.setTextColor(colors.yellow)
-            term.write(" [Keine Playlist im Master]")
+            term.setTextColor(colors.white)
+            term.write(string.format(" Track %d", curIdx))
         end
 
-        local curTrackTitle = "Kein Track verfuegbar"
-        if type(state.radioPlaylist) == "table" and #state.radioPlaylist > 0 then
-            local curIdx = math.max(1, math.min(#state.radioPlaylist, state.radioTrackIdx or 1))
+        local curTrackTitle = (state.curRadioTitle and state.curRadioTitle ~= "") and state.curRadioTitle or "Kein Track verfuegbar"
+        if curTrackTitle == "Kein Track verfuegbar" and type(state.radioPlaylist) == "table" and #state.radioPlaylist > 0 then
             local trk = state.radioPlaylist[curIdx]
             curTrackTitle = (trk and trk.title and not state.isBadTitle(trk.title, trk.id)) and trk.title or "YouTube-Video"
         end
@@ -746,7 +748,7 @@ local function drawUI()
         term.setCursorPos(2, 8)
         term.setBackgroundColor(colors.black)
         term.setTextColor(colors.lightGray)
-        term.write("Auto-Play aktiv (Playlist im Master verwaltet)")
+        term.write("Live-Stream aktiv (Zentraler Radio-Host)")
     else
         -- 3. Eingabefeld fuer lokales YouTube-Video (zeigt im Ruhezustand den Videotitel als Lauftext!)
         term.setCursorPos(2, 5)
@@ -1414,6 +1416,22 @@ local function main()
                         if CFG.MODES[state.triggerMode] == "RADIO" then
                             stopAllSpeakers()
                             syncAudioEngine()
+                        end
+                        state.dirty = true
+                    end
+                end
+
+            elseif protocol == CFG.STREAM_PROTOCOL and not state.updatingState then
+                if CFG.MODES[state.triggerMode] == "RADIO" and not state.emergencyActive and not state.lockdownActive then
+                    if type(message) == "table" and message.action == "radio_chunk" and message.chunk then
+                        state.curRadioTrackIdx = message.trackIdx or 1
+                        state.curRadioTitle    = message.trackTitle or "Radio-Track"
+                        local vol = (state.volumePct / 100) * 3.0
+                        if vol > 0.001 and #state.speakers > 0 then
+                            local ok, pcm = pcall(state.decoder, message.chunk)
+                            if ok and pcm then
+                                pushBufferToSpeakers(pcm, vol)
+                            end
                         end
                         state.dirty = true
                     end

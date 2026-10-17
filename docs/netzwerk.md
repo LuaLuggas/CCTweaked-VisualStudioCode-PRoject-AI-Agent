@@ -30,6 +30,9 @@ Diese Datei dokumentiert alle Funk-Protokolle, Kanäle, festen Computer-IDs und 
 | `speaker_update` | `MasterComputer` $\leftrightarrow$ `Lautsprecher` | Remote-Updates, Status-Pings und `log_report` für Lautsprecher-PCs. |
 | `speaker_config` | `MasterComputer` $\leftrightarrow$ `Lautsprecher` | Zentrale Synchronisation der Emergency-/Lockdown-YouTube-Sounds & Alarm-Lautstärke (`set_alarm_config` / `request_speaker_sync`). |
 | `speaker_trigger` | Beliebiger Sender $\rightarrow$ `Lautsprecher` | Funk-Auslöser für Lautsprecher im Modus `FUNK` (`"PLAY"` / `"STOP"` oder `{ action = "play"/"stop", url = "..." }`). |
+| `radio_update` | `MasterComputer` $\leftrightarrow$ `RadioHost` | Remote-Updates, Status-Pings und `log_report` für den zentralen Radio-Host. |
+| `radio_config` | `MasterComputer` $\leftrightarrow$ `RadioHost` | Playlist-Synchronisation (`set_radio_playlist` / `request_radio_sync`) und Steuerbefehle (`play`, `stop`, `skip`). |
+| `bunker_radio_stream` | `RadioHost` $\rightarrow$ `Lautsprecher` | Live-Audio Broadcast (DFPWM Chunks à 3000 Bytes / 0.5s) für bunkerweite synchrone Musikübertragung. |
 
 ---
 
@@ -59,18 +62,18 @@ Alle Geräte melden ihren Status, Updates und Positionsdaten mit folgender Tabel
     details = "Online (Range: 5)",   -- string: Details für das Konsolen-Log im Master
     pos     = "100, 64, -200",       -- string: GPS-Koordinaten ("X, Y, Z" oder "GPS n.verf.")
     label   = "Tuer 12",             -- string: Computer-Label oder Fallback-Name
-    preview = "Wegweiser",           -- string (optional): Vorschautext für Geräteliste (bei TextAnzeige 1. Zeile, bei GPSHost "X:.. Y:.. Z:..", bei Lautsprecher Status/Titel)
-    devType = "sign"                 -- string (optional): "terminal" | "door" | "sign" | "gps" | "speaker"
+    preview = "Wegweiser",           -- string (optional): Vorschautext für Geräteliste (bei TextAnzeige 1. Zeile, bei GPSHost "X:.. Y:.. Z:..", bei Lautsprecher/RadioHost Status/Titel)
+    devType = "sign"                 -- string (optional): "terminal" | "door" | "sign" | "gps" | "speaker" | "radio"
 }
 ```
 
 **Geräte-Ping vom Master (`REF`-Button in der Geräteliste):**
-- Master sendet `"STATUS_REQUEST"` per Broadcast auf `notaus`, `notaus_update`, `doors_config`, `signs_config`, `signs_update`, `gps_config`, `gps_update`, `speaker_config`, `speaker_update`.
+- Master sendet `"STATUS_REQUEST"` per Broadcast auf `notaus`, `notaus_update`, `doors_config`, `signs_config`, `signs_update`, `gps_config`, `gps_update`, `speaker_config`, `speaker_update`, `radio_config`, `radio_update`.
 - Alle aktiven Geräte antworten daraufhin mit einem `log_report` (bzw. Status-String).
 
 ---
 
-### 3.3 Konfigurations- & Trigger-Befehle (`doors_config`, `signs_config`, `gps_config`, `speaker_config`, `speaker_trigger`)
+### 3.3 Konfigurations- & Trigger-Befehle (`doors_config`, `signs_config`, `gps_config`, `speaker_config`, `speaker_trigger`, `radio_config`, `bunker_radio_stream`)
 
 | Protokoll | Richtung | Nachrichten-Tabelle / String | Beschreibung |
 | :--- | :--- | :--- | :--- |
@@ -80,7 +83,10 @@ Alle Geräte melden ihren Status, Updates und Positionsdaten mit folgender Tabel
 | `gps_config` & `gps_update` | Master $\rightarrow$ Broadcast | `{ action = "relocate" }` | Weist alle GPS-Hosts an, ihre lokal gespeicherten Koordinaten neu zu laden und das Modem neu zu initialisieren. |
 | `speaker_config` | `Lautsprecher` $\rightarrow$ Master (`24`) | `{ action = "request_speaker_sync" }` | Fragt beim Start des Lautsprechers die zentrale Emergency-/Lockdown-Konfiguration und Radio-Playlist vom Master ab. |
 | `speaker_config` | Master $\rightarrow$ Broadcast / Einzel-ID | `{ action = "set_alarm_config", emergencyUrl = "...", lockdownUrl = "...", alarmVol = 100, radioPlaylist = { ... }, isReply = false }` | Uebertraegt die zentralen YouTube-Links/IDs fuer Emergency & Lockdown sowie die zentrale Alarm-Lautstaerke (`0`–`100%`) und Radio-Playlist an Lautsprecher. |
-| `speaker_config` | Master $\rightarrow$ Broadcast / Einzel-ID | `{ action = "set_radio_playlist", playlist = { { id = "...", title = "..." }, ... } }` | Verteilt die zentrale Bunker-Radio Playlist an alle Lautsprecher (im Modus `RADIO` startet sofort der erste Track im Loop). |
+| `speaker_config` & `radio_config` | Master $\rightarrow$ Broadcast / Einzel-ID | `{ action = "set_radio_playlist", playlist = { { id = "...", title = "..." }, ... } }` | Verteilt die zentrale Bunker-Radio Playlist an Lautsprecher und den zentralen `RadioHost`. |
+| `radio_config` | `RadioHost` $\rightarrow$ Master (`24`) | `{ action = "request_radio_sync" }` | Fragt beim Start die Playlist vom Master ab. Master antwortet mit `set_radio_playlist`. |
+| `radio_config` | Master $\rightarrow$ `RadioHost` | `{ action = "play" }` / `{ action = "stop" }` / `{ action = "skip" }` | Steuert den zentralen Radio-Host (Wiedergabe, Pause, Track überspringen). |
+| `bunker_radio_stream` | `RadioHost` $\rightarrow$ Broadcast | `{ action = "radio_chunk", chunk = "<raw dfpwm>", trackIdx = 1, trackTitle = "..." }` | Live-Audio Stream: Sendet alle ~0.5s einen 3000-Byte DFPWM-Block, der von allen Lautsprechern im Modus `[ RADIO ]` synchron abgespielt wird. |
 | `speaker_trigger` | Beliebiger PC $\rightarrow$ `Lautsprecher` | `"PLAY"` / `"STOP"` oder `{ action = "play"/"stop", url = "..." }` | Startet oder stoppt die Wiedergabe auf Lautsprechern im Trigger-Modus `FUNK`. |
 
 ---

@@ -59,7 +59,9 @@ local spkCfg = {
     editRadioPlaylist = {},
     selectedTrackIdx  = nil,
     radioScrollOffset = 0,
-    marqueeOffset     = 0
+    marqueeOffset     = 0,
+    protoRadioUpdate  = "radio_update",
+    protoRadioConfig  = "radio_config"
 }
 
 local statusMessage = ""
@@ -106,6 +108,87 @@ local function getMarqueeText(str, maxLen, offset)
     local startIdx = ((offset or 0) % #full) + 1
     local repeated = full .. full
     return repeated:sub(startIdx, startIdx + maxLen - 1)
+end
+
+spkCfg.cleanTitle = function(raw)
+    local s = tostring(raw or "")
+    s = s:gsub("\195\164", "ae"):gsub("\195\182", "oe"):gsub("\195\188", "ue")
+    s = s:gsub("\195\132", "Ae"):gsub("\195\150", "Oe"):gsub("\195\156", "Ue"):gsub("\195\159", "ss")
+    s = s:gsub("\226\128\147", "-"):gsub("\226\128\148", "-")
+    s = s:gsub("[^\32-\126]", "")
+    s = s:gsub("%s+", " "):gsub("^%s+", ""):gsub("%s+$", "")
+    return s
+end
+
+spkCfg.isBadTitle = function(t, id)
+    local s = tostring(t or ""):gsub("^%s+", ""):gsub("%s+$", "")
+    if s == "" then return true end
+    if id and s == tostring(id) then return true end
+    local low = s:lower()
+    if low:find("help me keep") or low:find("hosting is expensive") or low:find("patreon") then return true end
+    if low:find("http://") or low:find("https://") or low:find("youtu%.be") or low:find("youtube%.com") then return true end
+    return false
+end
+
+spkCfg.fetchVideoInfo = function(input)
+    local trimmed = tostring(input or ""):gsub("^%s+", ""):gsub("%s+$", "")
+    if trimmed == "" then return "", "" end
+    local vid = extractYoutubeId(trimmed)
+
+    -- 1. Offizielle YouTube oEmbed API fuer den echten Videonamen (funktioniert auch bei ungelisteten Videos)
+    if vid ~= "" and http then
+        local oUrl = "https://www.youtube.com/oembed?url=https://www.youtube.com/watch?v=" .. vid .. "&format=json"
+        local res = http.get(oUrl)
+        if res then
+            local body = res.readAll()
+            res.close()
+            local data = textutils.unserializeJSON(body)
+            if type(data) == "table" and type(data.title) == "string" and #data.title > 0 then
+                local clean = spkCfg.cleanTitle(data.title)
+                if clean ~= "" then return vid, clean end
+            end
+        end
+        local nUrl = "https://noembed.com/embed?url=https://www.youtube.com/watch?v=" .. vid
+        local nRes = http.get(nUrl)
+        if nRes then
+            local nBody = nRes.readAll()
+            nRes.close()
+            local nData = textutils.unserializeJSON(nBody)
+            if type(nData) == "table" and type(nData.title) == "string" and #nData.title > 0 then
+                local clean = spkCfg.cleanTitle(nData.title)
+                if clean ~= "" then return vid, clean end
+            end
+        end
+    end
+
+    -- 2. Fallback / Text-Suche ueber Cloud-API (ignoriert den Patreon-Werbeeintrag auf Platz 1!)
+    if http then
+        local q = (vid ~= "") and vid or trimmed
+        local sUrl = "https://ipod-2to6magyna-uc.a.run.app/?v=2.1&search=" .. textutils.urlEncode(q)
+        local res = http.get(sUrl)
+        if res then
+            local body = res.readAll()
+            res.close()
+            local list = textutils.unserializeJSON(body)
+            if type(list) == "table" then
+                for _, item in ipairs(list) do
+                    if type(item) == "table" and type(item.id) == "string" and item.id ~= "9Se1cKmJ_Ik" then
+                        local nameClean = spkCfg.cleanTitle(item.name)
+                        if not spkCfg.isBadTitle(nameClean, item.id) then
+                            if vid == "" or item.id == vid then
+                                return item.id, nameClean
+                            end
+                        end
+                    end
+                end
+            end
+        end
+    end
+
+    if vid ~= "" then
+        return vid, "YouTube-Video"
+    end
+    return "", ""
 end
 
 local function hasPendingSignBlinkChanges()
@@ -184,6 +267,7 @@ local function saveMasterConfig()
 end
 
 local function loadMasterConfig()
+    local repaired = false
     if fs.exists(MASTER_CFG_FILE) then
         local f = fs.open(MASTER_CFG_FILE, "r")
         if f then
@@ -195,20 +279,37 @@ local function loadMasterConfig()
                 if type(data.signBlinkOn) == "number" then signBlinkOn = data.signBlinkOn end
                 if type(data.signBlinkOff) == "number" then signBlinkOff = data.signBlinkOff end
                 if type(data.spkEmergencyUrl) == "string" then spkCfg.emergencyUrl = data.spkEmergencyUrl end
-                if type(data.spkEmergencyTitle) == "string" then spkCfg.emergencyTitle = data.spkEmergencyTitle end
+                if type(data.spkEmergencyTitle) == "string" then spkCfg.emergencyTitle = spkCfg.cleanTitle(data.spkEmergencyTitle) end
                 if type(data.spkLockdownUrl) == "string" then spkCfg.lockdownUrl = data.spkLockdownUrl end
-                if type(data.spkLockdownTitle) == "string" then spkCfg.lockdownTitle = data.spkLockdownTitle end
+                if type(data.spkLockdownTitle) == "string" then spkCfg.lockdownTitle = spkCfg.cleanTitle(data.spkLockdownTitle) end
                 if type(data.spkAlarmVol) == "number" then spkCfg.alarmVol = math.max(0, math.min(100, data.spkAlarmVol)) end
                 if type(data.spkRadioPlaylist) == "table" then
                     spkCfg.radioPlaylist = {}
                     for _, t in ipairs(data.spkRadioPlaylist) do
                         if type(t) == "table" and t.id then
-                            table.insert(spkCfg.radioPlaylist, { id = tostring(t.id), title = tostring(t.title or t.id) })
+                            local vid = tostring(t.id)
+                            local ttl = spkCfg.cleanTitle(t.title or "")
+                            if spkCfg.isBadTitle(ttl, vid) then
+                                local _, realTitle = spkCfg.fetchVideoInfo(vid)
+                                if realTitle ~= "" then ttl = realTitle; repaired = true end
+                            end
+                            table.insert(spkCfg.radioPlaylist, { id = vid, title = (ttl ~= "" and ttl or "YouTube-Video") })
                         end
                     end
                 end
             end
         end
+    end
+    if spkCfg.emergencyUrl ~= "" and spkCfg.isBadTitle(spkCfg.emergencyTitle, extractYoutubeId(spkCfg.emergencyUrl)) then
+        local _, realEm = spkCfg.fetchVideoInfo(spkCfg.emergencyUrl)
+        if realEm ~= "" then spkCfg.emergencyTitle = realEm; repaired = true end
+    end
+    if spkCfg.lockdownUrl ~= "" and spkCfg.isBadTitle(spkCfg.lockdownTitle, extractYoutubeId(spkCfg.lockdownUrl)) then
+        local _, realLd = spkCfg.fetchVideoInfo(spkCfg.lockdownUrl)
+        if realLd ~= "" then spkCfg.lockdownTitle = realLd; repaired = true end
+    end
+    if repaired then
+        saveMasterConfig()
     end
     editSignSplitBlink        = signSplitBlink
     editSignBlinkOn           = signBlinkOn
@@ -270,6 +371,8 @@ local function registerTerminal(id, label, pos, protocol, preview, explicitType)
             devType = "sign"
         elseif protocol == UPDATE_PROTOCOL_SPK or protocol == CONFIG_PROTOCOL_SPK then
             devType = "speaker"
+        elseif protocol == spkCfg.protoRadioUpdate or protocol == spkCfg.protoRadioConfig then
+            devType = "radio"
         elseif protocol == UPDATE_PROTOCOL_TERM or protocol == STATUS_PROTOCOL then
             devType = "terminal"
         elseif prevEntry and prevEntry.devType then
@@ -334,6 +437,8 @@ local function getTerminalsList(filter)
         elseif filter == "gps" and termData.devType == "gps" then
             table.insert(list, termData)
         elseif filter == "speakers" and termData.devType == "speaker" then
+            table.insert(list, termData)
+        elseif filter == "radio" and termData.devType == "radio" then
             table.insert(list, termData)
         end
     end
@@ -435,9 +540,10 @@ local function drawVerwGeraeteUI()
     drawMenuButton("terminals_signs", 10, "TEXTANZEIGEN", colors.gray)
     drawMenuButton("terminals_gps", 12, "GPS-HOSTS", colors.gray)
     drawMenuButton("terminals_speakers", 14, "LAUTSPRECHER", colors.gray)
-    drawMenuButton("nav_verw_main", 16, "ZURUECK", colors.lightGray)
+    drawMenuButton("terminals_radio", 16, "RADIO-HOSTS", colors.gray)
+    drawMenuButton("nav_verw_main", 18, "ZURUECK", colors.lightGray)
 
-    drawDebugOverlay(17)
+    drawDebugOverlay(18)
 end
 
 local function drawVerwUpdatesUI()
@@ -448,10 +554,11 @@ local function drawVerwUpdatesUI()
     drawMenuButton("update_signs", 8, "UPDATE: ANZEIGEN", colors.gray)
     drawMenuButton("update_gps", 10, "UPDATE: GPS-HOSTS", colors.gray)
     drawMenuButton("update_speakers", 12, "UPDATE: SPEAKER", colors.gray)
-    drawMenuButton("update_master", 14, "UPDATE: MASTER", colors.cyan, colors.black)
-    drawMenuButton("nav_verw_main", 16, "ZURUECK", colors.lightGray)
+    drawMenuButton("update_radio", 14, "UPDATE: RADIO-HOST", colors.gray)
+    drawMenuButton("update_master", 16, "UPDATE: MASTER", colors.cyan, colors.black)
+    drawMenuButton("nav_verw_main", 18, "ZURUECK", colors.lightGray)
 
-    drawDebugOverlay(17)
+    drawDebugOverlay(18)
 end
 
 local function drawVerwSettingsUI()
@@ -497,8 +604,19 @@ local function drawVerwSettingsGpsUI()
 end
 
 local function drawVerwSettingsSpkUI()
+    if viewMode == "verw_settings_spk" then
+        drawHeaderTitle(2, "--- LAUTSPRECHER ---", colors.orange)
+
+        drawMenuButton("nav_spk_alert", 5, "ALERT", colors.gray)
+        drawMenuButton("nav_spk_radio", 7, "RADIO", colors.gray)
+        drawMenuButton("nav_verw_settings", 14, "ZURUECK", colors.lightGray)
+
+        drawDebugOverlay(15)
+        return
+    end
+
     local w = term.getSize()
-    drawHeaderTitle(1, "--- LAUTSPRECHER ---", colors.orange)
+    drawHeaderTitle(1, "--- SPEAKER ALERT ---", colors.orange)
 
     local boxW   = math.min(22, w - 2)
     local startX = math.floor((w - boxW) / 2) + 1
@@ -507,17 +625,19 @@ local function drawVerwSettingsSpkUI()
     term.setBackgroundColor(colors.black)
     term.setTextColor(colors.red)
     term.write("Emergency Sound:")
-    local emTitle = (#spkCfg.emergencyTitle > 0) and spkCfg.emergencyTitle or (#spkCfg.editEmergencyUrl > 0 and spkCfg.editEmergencyUrl or "[ Link eingeben ]")
-    local emDisp = getMarqueeText(emTitle, boxW, spkCfg.marqueeOffset)
-    addButton("spk_edit_em", startX, 4, boxW, emDisp, colors.gray, (#spkCfg.editEmergencyUrl > 0) and colors.white or colors.lightGray)
+    local hasEm   = (#(spkCfg.editEmergencyUrl or "") > 0)
+    local emTitle = (hasEm and #(spkCfg.editEmergencyTitle or "") > 0) and spkCfg.editEmergencyTitle or (hasEm and "YouTube-Video" or "[ Link eingeben ]")
+    local emDisp  = getMarqueeText(emTitle, boxW, spkCfg.marqueeOffset)
+    addButton("spk_edit_em", startX, 4, boxW, emDisp, colors.gray, hasEm and colors.white or colors.lightGray)
 
     term.setCursorPos(startX, 6)
     term.setBackgroundColor(colors.black)
     term.setTextColor(colors.orange)
     term.write("Lockdown Sound:")
-    local ldTitle = (#spkCfg.lockdownTitle > 0) and spkCfg.lockdownTitle or (#spkCfg.editLockdownUrl > 0 and spkCfg.editLockdownUrl or "[ Link eingeben ]")
-    local ldDisp = getMarqueeText(ldTitle, boxW, spkCfg.marqueeOffset)
-    addButton("spk_edit_ld", startX, 7, boxW, ldDisp, colors.gray, (#spkCfg.editLockdownUrl > 0) and colors.white or colors.lightGray)
+    local hasLd   = (#(spkCfg.editLockdownUrl or "") > 0)
+    local ldTitle = (hasLd and #(spkCfg.editLockdownTitle or "") > 0) and spkCfg.editLockdownTitle or (hasLd and "YouTube-Video" or "[ Link eingeben ]")
+    local ldDisp  = getMarqueeText(ldTitle, boxW, spkCfg.marqueeOffset)
+    addButton("spk_edit_ld", startX, 7, boxW, ldDisp, colors.gray, hasLd and colors.white or colors.lightGray)
 
     term.setCursorPos(startX, 9)
     term.setBackgroundColor(colors.black)
@@ -527,25 +647,22 @@ local function drawVerwSettingsSpkUI()
     addButton("spk_vol_dec", startX + 10, 9, 5, "-10%", colors.gray)
     addButton("spk_vol_inc", startX + 17, 9, 5, "+10%", colors.gray)
 
-    -- Radio Playlist Untermenue
-    drawMenuButton("nav_spk_radio", 11, "RADIO PLAYLIST", colors.yellow, colors.black)
-
     local isDirty = hasPendingSpkChanges()
     drawMenuButton(
         "spk_send_alarm",
-        13,
+        12,
         "SPEICHERN & SENDEN",
         isDirty and colors.orange or colors.gray,
         isDirty and colors.black or colors.white
     )
-    drawMenuButton("nav_verw_settings", 15, "ZURUECK", colors.lightGray)
+    drawMenuButton("nav_spk_settings", 14, "ZURUECK", colors.lightGray)
 
-    drawDebugOverlay(16)
+    drawDebugOverlay(15)
 end
 
 local function drawVerwSettingsSpkRadioUI()
     local w = term.getSize()
-    drawHeaderTitle(1, "--- RADIO PLAYLIST ---", colors.yellow)
+    drawHeaderTitle(1, "--- SPEAKER RADIO ---", colors.yellow)
 
     local boxW   = math.min(22, w - 2)
     local startX = math.floor((w - boxW) / 2) + 1
@@ -579,8 +696,9 @@ local function drawVerwSettingsSpkRadioUI()
         local isSel = (spkCfg.selectedTrackIdx == i)
         local bgCol = isSel and colors.cyan or colors.gray
         local fgCol = isSel and colors.black or colors.white
-        local titleStr = string.format("%d. %s", i, trk.title or trk.id or "Track")
-        local dispText = getMarqueeText(titleStr, boxW, isSel and (spkCfg.marqueeOffset or 0) or 0)
+        local cleanName = (trk.title and not spkCfg.isBadTitle(trk.title, trk.id)) and trk.title or "YouTube-Video"
+        local titleStr = string.format("%d. %s", i, cleanName)
+        local dispText = getMarqueeText(titleStr, boxW, spkCfg.marqueeOffset or 0)
         addButton("radio_track_" .. i, startX, yCursor, boxW, dispText, bgCol, fgCol)
         yCursor = yCursor + 1
     end
@@ -592,7 +710,7 @@ local function drawVerwSettingsSpkRadioUI()
         term.write("Keine Tracks vorhanden.")
     end
 
-    -- Aktionen fuer selektierten Track (Zeilen 9 & 10)
+    -- Aktionen fuer selektierten Track (Zeilen 10 & 11)
     if spkCfg.selectedTrackIdx and list[spkCfg.selectedTrackIdx] then
         addButton("radio_move_up", startX, 10, 10, "^ HOCH", colors.gray)
         addButton("radio_move_dn", startX + 12, 10, 10, "v RUNTER", colors.gray)
@@ -755,6 +873,9 @@ local function drawTerminalsUI()
     elseif terminalFilter == "speakers" then
         title = "--- LAUTSPRECHER ---"
         titleCol = colors.orange
+    elseif terminalFilter == "radio" then
+        title = "--- RADIO-HOSTS ---"
+        titleCol = colors.yellow
     end
     drawHeaderTitle(1, title, titleCol)
 
@@ -773,7 +894,7 @@ local function drawTerminalsUI()
             local displayLabel = tData.label or ("ID " .. tostring(tData.id))
             if tData.devType == "sign" and tData.preview and #tostring(tData.preview) > 0 then
                 displayLabel = "\"" .. tostring(tData.preview) .. "\""
-            elseif (tData.devType == "gps" or tData.devType == "speaker") and tData.preview and #tostring(tData.preview) > 0 then
+            elseif (tData.devType == "gps" or tData.devType == "speaker" or tData.devType == "radio") and tData.preview and #tostring(tData.preview) > 0 then
                 displayLabel = "[" .. tostring(tData.preview) .. "]"
             end
             local line1 = string.format("ID:%d | %s", tData.id, displayLabel)
@@ -823,7 +944,7 @@ local function drawUI()
     elseif viewMode == "verw_settings_doors" then drawVerwSettingsDoorsUI()
     elseif viewMode == "verw_settings_signs" then drawVerwSettingsSignsUI()
     elseif viewMode == "verw_settings_gps" then drawVerwSettingsGpsUI()
-    elseif viewMode == "verw_settings_spk" then drawVerwSettingsSpkUI()
+    elseif viewMode == "verw_settings_spk" or viewMode == "verw_settings_spk_alert" then drawVerwSettingsSpkUI()
     elseif viewMode == "verw_settings_spk_radio" then drawVerwSettingsSpkRadioUI()
     elseif viewMode == "sign_blink" then drawSignBlinkUI()
     elseif viewMode == "console" then drawConsoleUI()
@@ -931,11 +1052,16 @@ local function handleAction(id)
     elseif id == "nav_verw_settings_doors" or id == "verw_settings_doors" then viewMode = "verw_settings_doors"; scrollOffset = 0
     elseif id == "nav_verw_settings_signs" then viewMode = "verw_settings_signs"; scrollOffset = 0
     elseif id == "nav_verw_settings_gps" then viewMode = "verw_settings_gps"; scrollOffset = 0
-    elseif id == "nav_verw_settings_spk" then
-        spkCfg.editEmergencyUrl = spkCfg.emergencyUrl or ""
-        spkCfg.editLockdownUrl  = spkCfg.lockdownUrl or ""
-        spkCfg.editAlarmVol     = spkCfg.alarmVol or 100
+    elseif id == "nav_verw_settings_spk" or id == "nav_spk_settings" then
         viewMode = "verw_settings_spk"
+        scrollOffset = 0
+    elseif id == "nav_spk_alert" then
+        spkCfg.editEmergencyUrl   = spkCfg.emergencyUrl or ""
+        spkCfg.editEmergencyTitle = spkCfg.emergencyTitle or ""
+        spkCfg.editLockdownUrl    = spkCfg.lockdownUrl or ""
+        spkCfg.editLockdownTitle  = spkCfg.lockdownTitle or ""
+        spkCfg.editAlarmVol       = spkCfg.alarmVol or 100
+        viewMode = "verw_settings_spk_alert"
         scrollOffset = 0
     elseif id == "nav_sign_blink" then
         editSignSplitBlink = signSplitBlink
@@ -967,6 +1093,10 @@ local function handleAction(id)
         rednet.broadcast({ action = "update" }, UPDATE_PROTOCOL_SPK)
         addLog(0, true, "Sende GitHub-Update: Lautsprecher", "Master", "Master", nil)
         addDebugMsg("Update an Lautsprecher gesendet!")
+    elseif id == "update_radio" then
+        rednet.broadcast({ action = "update" }, spkCfg.protoRadioUpdate)
+        addLog(0, true, "Sende GitHub-Update: Radio-Host", "Master", "Master", nil)
+        addDebugMsg("Update an Radio-Host gesendet!")
     elseif id == "update_master" then
         applyMasterSelfUpdate()
     
@@ -976,6 +1106,7 @@ local function handleAction(id)
     elseif id == "terminals_signs" then terminalFilter = "signs"; viewMode = "terminals"; scrollOffset = 0
     elseif id == "terminals_gps" then terminalFilter = "gps"; viewMode = "terminals"; scrollOffset = 0
     elseif id == "terminals_speakers" then terminalFilter = "speakers"; viewMode = "terminals"; scrollOffset = 0
+    elseif id == "terminals_radio" then terminalFilter = "radio"; viewMode = "terminals"; scrollOffset = 0
     
     elseif id == "geraete_del" then
         local idNum = editInput("Geraete ID zum Loeschen:", true)
@@ -993,7 +1124,7 @@ local function handleAction(id)
         scrollOffset = 0
         addDebugMsg("Geraeteliste geleert.")
     elseif id == "geraete_ref" then
-        -- Sendet Status-Request an alle Geraete-Typen inklusive GPS-Hosts & Lautsprecher!
+        -- Sendet Status-Request an alle Geraete-Typen inklusive GPS-Hosts, Lautsprecher & Radio-Hosts!
         rednet.broadcast("STATUS_REQUEST", STATUS_PROTOCOL)
         rednet.broadcast("STATUS_REQUEST", UPDATE_PROTOCOL_TERM)
         rednet.broadcast("STATUS_REQUEST", CONFIG_PROTOCOL_DOOR)
@@ -1003,6 +1134,8 @@ local function handleAction(id)
         rednet.broadcast("STATUS_REQUEST", UPDATE_PROTOCOL_GPS)
         rednet.broadcast("STATUS_REQUEST", CONFIG_PROTOCOL_SPK)
         rednet.broadcast("STATUS_REQUEST", UPDATE_PROTOCOL_SPK)
+        rednet.broadcast("STATUS_REQUEST", spkCfg.protoRadioConfig)
+        rednet.broadcast("STATUS_REQUEST", spkCfg.protoRadioUpdate)
         addDebugMsg("Ping an alle Geraete gesendet...")
     
     elseif id == "console_clr" then
@@ -1040,9 +1173,6 @@ local function handleAction(id)
         end
         viewMode = "verw_settings_spk_radio"
         scrollOffset = 0
-    elseif id == "nav_spk_settings" then
-        viewMode = "verw_settings_spk"
-        scrollOffset = 0
     elseif id == "radio_scroll_up" then
         spkCfg.radioScrollOffset = math.max(0, (spkCfg.radioScrollOffset or 0) - 1)
     elseif id == "radio_scroll_dn" then
@@ -1078,30 +1208,17 @@ local function handleAction(id)
             spkCfg.selectedTrackIdx = nil
         end
     elseif id == "radio_add_track" then
-        local input = editInput("YT-Link / Video-ID:", false)
+        local input = editInput("YT-Link einfuegen:", false)
         if input and #input > 0 then
-            addDebugMsg("Lade Video-Titel...")
+            addDebugMsg("Lade Videotitel...")
             drawUI()
-            local vid = extractYoutubeId(input)
+            local vid, title = spkCfg.fetchVideoInfo(input)
             if vid ~= "" then
-                local title = vid
-                if http then
-                    local url = "https://ipod-2to6magyna-uc.a.run.app/?v=2.1&search=" .. textutils.urlEncode(vid)
-                    local res = http.get(url)
-                    if res then
-                        local body = res.readAll()
-                        res.close()
-                        local data = textutils.unserializeJSON(body)
-                        if type(data) == "table" and data[1] and type(data[1].name) == "string" then
-                            title = data[1].name
-                        end
-                    end
-                end
                 table.insert(spkCfg.editRadioPlaylist, { id = vid, title = title })
                 spkCfg.selectedTrackIdx = #spkCfg.editRadioPlaylist
-                addDebugMsg("Track: " .. title:sub(1, 14))
+                addDebugMsg("Gefunden: " .. title:sub(1, 14))
             else
-                addDebugMsg("Fehler: Ungueltige YT-ID!")
+                addDebugMsg("Fehler: Kein Video gefunden!")
             end
         end
     elseif id == "radio_save_send" then
@@ -1114,72 +1231,68 @@ local function handleAction(id)
             action   = "set_radio_playlist",
             playlist = spkCfg.radioPlaylist
         }, CONFIG_PROTOCOL_SPK)
+        rednet.broadcast({
+            action   = "set_radio_playlist",
+            playlist = spkCfg.radioPlaylist
+        }, spkCfg.protoRadioConfig)
         addLog(0, true, string.format("Sende Radio (%d Tracks)", #spkCfg.radioPlaylist), "Master", "Master", nil)
         addDebugMsg(string.format("Radio gesendet (%d)", #spkCfg.radioPlaylist))
 
     elseif id == "spk_edit_em" then
         local val = editInput("Emergency-Link (-=Leer):", false)
         if val == "-" then
-            spkCfg.editEmergencyUrl = ""
-            spkCfg.emergencyTitle   = ""
+            spkCfg.editEmergencyUrl   = ""
+            spkCfg.editEmergencyTitle = ""
         elseif val then
-            spkCfg.editEmergencyUrl = val
-            local vid = extractYoutubeId(val)
-            local title = vid ~= "" and vid or val
-            if http and vid ~= "" then
-                addDebugMsg("Lade Titel...")
-                drawUI()
-                local res = http.get("https://ipod-2to6magyna-uc.a.run.app/?v=2.1&search=" .. textutils.urlEncode(vid))
-                if res then
-                    local data = textutils.unserializeJSON(res.readAll())
-                    res.close()
-                    if type(data) == "table" and data[1] and type(data[1].name) == "string" then
-                        title = data[1].name
-                    end
-                end
+            addDebugMsg("Lade Videotitel...")
+            drawUI()
+            local vid, title = spkCfg.fetchVideoInfo(val)
+            if vid ~= "" then
+                spkCfg.editEmergencyUrl   = vid
+                spkCfg.editEmergencyTitle = title
+                addDebugMsg("Gefunden: " .. title:sub(1, 14))
+            else
+                addDebugMsg("Fehler: Kein Video gefunden!")
             end
-            spkCfg.emergencyTitle = title
         end
     elseif id == "spk_edit_ld" then
         local val = editInput("Lockdown-Link (-=Leer):", false)
         if val == "-" then
-            spkCfg.editLockdownUrl = ""
-            spkCfg.lockdownTitle   = ""
+            spkCfg.editLockdownUrl   = ""
+            spkCfg.editLockdownTitle = ""
         elseif val then
-            spkCfg.editLockdownUrl = val
-            local vid = extractYoutubeId(val)
-            local title = vid ~= "" and vid or val
-            if http and vid ~= "" then
-                addDebugMsg("Lade Titel...")
-                drawUI()
-                local res = http.get("https://ipod-2to6magyna-uc.a.run.app/?v=2.1&search=" .. textutils.urlEncode(vid))
-                if res then
-                    local data = textutils.unserializeJSON(res.readAll())
-                    res.close()
-                    if type(data) == "table" and data[1] and type(data[1].name) == "string" then
-                        title = data[1].name
-                    end
-                end
+            addDebugMsg("Lade Videotitel...")
+            drawUI()
+            local vid, title = spkCfg.fetchVideoInfo(val)
+            if vid ~= "" then
+                spkCfg.editLockdownUrl   = vid
+                spkCfg.editLockdownTitle = title
+                addDebugMsg("Gefunden: " .. title:sub(1, 14))
+            else
+                addDebugMsg("Fehler: Kein Video gefunden!")
             end
-            spkCfg.lockdownTitle = title
         end
     elseif id == "spk_vol_dec" then
         spkCfg.editAlarmVol = math.max(0, (spkCfg.editAlarmVol or 100) - 10)
     elseif id == "spk_vol_inc" then
         spkCfg.editAlarmVol = math.min(100, (spkCfg.editAlarmVol or 100) + 10)
     elseif id == "spk_send_alarm" then
-        spkCfg.emergencyUrl = spkCfg.editEmergencyUrl or ""
-        spkCfg.lockdownUrl  = spkCfg.editLockdownUrl or ""
-        spkCfg.alarmVol     = spkCfg.editAlarmVol or 100
+        spkCfg.emergencyUrl   = spkCfg.editEmergencyUrl or ""
+        spkCfg.emergencyTitle = spkCfg.editEmergencyTitle or ""
+        spkCfg.lockdownUrl    = spkCfg.editLockdownUrl or ""
+        spkCfg.lockdownTitle  = spkCfg.editLockdownTitle or ""
+        spkCfg.alarmVol       = spkCfg.editAlarmVol or 100
         saveMasterConfig()
         rednet.broadcast({
-            action        = "set_alarm_config",
-            emergencyUrl  = spkCfg.emergencyUrl,
-            lockdownUrl   = spkCfg.lockdownUrl,
-            alarmVol      = spkCfg.alarmVol,
-            alarmVolPct   = spkCfg.alarmVol,
-            radioPlaylist = spkCfg.radioPlaylist or {},
-            isReply       = false
+            action         = "set_alarm_config",
+            emergencyUrl   = spkCfg.emergencyUrl,
+            emergencyTitle = spkCfg.emergencyTitle,
+            lockdownUrl    = spkCfg.lockdownUrl,
+            lockdownTitle  = spkCfg.lockdownTitle,
+            alarmVol       = spkCfg.alarmVol,
+            alarmVolPct    = spkCfg.alarmVol,
+            radioPlaylist  = spkCfg.radioPlaylist or {},
+            isReply        = false
         }, CONFIG_PROTOCOL_SPK)
         addLog(0, true, string.format("Sende Speaker-Alarm-Sync (Vol:%d%%)", spkCfg.alarmVol), "Master", "Master", nil)
         addDebugMsg("Gespeichert und an alle Speaker gesendet.")
@@ -1265,7 +1378,7 @@ local function main()
         elseif event == "rednet_message" then
             local id, message, protocol = p1, p2, p3
 
-            if (protocol == UPDATE_PROTOCOL_TERM or protocol == UPDATE_PROTOCOL_DOOR or protocol == UPDATE_PROTOCOL_SIGN or protocol == UPDATE_PROTOCOL_GPS or protocol == UPDATE_PROTOCOL_SPK or protocol == CONFIG_PROTOCOL_DOOR or protocol == CONFIG_PROTOCOL_SIGN or protocol == CONFIG_PROTOCOL_GPS or protocol == CONFIG_PROTOCOL_SPK) and type(message) == "table" then
+            if (protocol == UPDATE_PROTOCOL_TERM or protocol == UPDATE_PROTOCOL_DOOR or protocol == UPDATE_PROTOCOL_SIGN or protocol == UPDATE_PROTOCOL_GPS or protocol == UPDATE_PROTOCOL_SPK or protocol == CONFIG_PROTOCOL_DOOR or protocol == CONFIG_PROTOCOL_SIGN or protocol == CONFIG_PROTOCOL_GPS or protocol == CONFIG_PROTOCOL_SPK or protocol == spkCfg.protoRadioUpdate or protocol == spkCfg.protoRadioConfig) and type(message) == "table" then
                 if message.action == "log_report" then
                     addLog(id, message.success, message.details, message.pos, message.label, protocol, message.preview, message.devType)
                     if viewMode == "console" or viewMode == "terminals" then drawUI() end
@@ -1279,14 +1392,22 @@ local function main()
                     }, CONFIG_PROTOCOL_SIGN)
                 elseif protocol == CONFIG_PROTOCOL_SPK and (message.action == "request_speaker_sync" or message.action == "request_radio_sync") then
                     rednet.send(id, {
-                        action        = "set_alarm_config",
-                        emergencyUrl  = spkCfg.emergencyUrl or "",
-                        lockdownUrl   = spkCfg.lockdownUrl or "",
-                        alarmVol      = spkCfg.alarmVol or 100,
-                        alarmVolPct   = spkCfg.alarmVol or 100,
-                        radioPlaylist = spkCfg.radioPlaylist or {},
-                        isReply       = true
+                        action         = "set_alarm_config",
+                        emergencyUrl   = spkCfg.emergencyUrl or "",
+                        emergencyTitle = spkCfg.emergencyTitle or "",
+                        lockdownUrl    = spkCfg.lockdownUrl or "",
+                        lockdownTitle  = spkCfg.lockdownTitle or "",
+                        alarmVol       = spkCfg.alarmVol or 100,
+                        alarmVolPct    = spkCfg.alarmVol or 100,
+                        radioPlaylist  = spkCfg.radioPlaylist or {},
+                        isReply        = true
                     }, CONFIG_PROTOCOL_SPK)
+                elseif protocol == spkCfg.protoRadioConfig and message.action == "request_radio_sync" then
+                    rednet.send(id, {
+                        action    = "set_radio_playlist",
+                        playlist  = spkCfg.radioPlaylist or {},
+                        isReply   = true
+                    }, spkCfg.protoRadioConfig)
                 end
             elseif protocol == STATUS_PROTOCOL and (message == "EMERGENCY_ON" or message == "EMERGENCY_OFF") then
                 local existingPos = registeredTerminals[id] and registeredTerminals[id].pos or "Terminal"
@@ -1306,7 +1427,7 @@ local function main()
                     changed = true
                 end
             end
-            if changed or viewMode == "verw_settings_spk_radio" or viewMode == "verw_settings_spk" then
+            if changed or viewMode == "verw_settings_spk_radio" or viewMode == "verw_settings_spk_alert" then
                 drawUI()
             end
         end

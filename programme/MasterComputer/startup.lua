@@ -59,7 +59,9 @@ local spkCfg = {
     editRadioPlaylist = {},
     selectedTrackIdx  = nil,
     radioScrollOffset = 0,
-    marqueeOffset     = 0
+    marqueeOffset     = 0,
+    protoRadioUpdate  = "radio_update",
+    protoRadioConfig  = "radio_config"
 }
 
 local statusMessage = ""
@@ -369,6 +371,8 @@ local function registerTerminal(id, label, pos, protocol, preview, explicitType)
             devType = "sign"
         elseif protocol == UPDATE_PROTOCOL_SPK or protocol == CONFIG_PROTOCOL_SPK then
             devType = "speaker"
+        elseif protocol == spkCfg.protoRadioUpdate or protocol == spkCfg.protoRadioConfig then
+            devType = "radio"
         elseif protocol == UPDATE_PROTOCOL_TERM or protocol == STATUS_PROTOCOL then
             devType = "terminal"
         elseif prevEntry and prevEntry.devType then
@@ -433,6 +437,8 @@ local function getTerminalsList(filter)
         elseif filter == "gps" and termData.devType == "gps" then
             table.insert(list, termData)
         elseif filter == "speakers" and termData.devType == "speaker" then
+            table.insert(list, termData)
+        elseif filter == "radio" and termData.devType == "radio" then
             table.insert(list, termData)
         end
     end
@@ -534,9 +540,10 @@ local function drawVerwGeraeteUI()
     drawMenuButton("terminals_signs", 10, "TEXTANZEIGEN", colors.gray)
     drawMenuButton("terminals_gps", 12, "GPS-HOSTS", colors.gray)
     drawMenuButton("terminals_speakers", 14, "LAUTSPRECHER", colors.gray)
-    drawMenuButton("nav_verw_main", 16, "ZURUECK", colors.lightGray)
+    drawMenuButton("terminals_radio", 16, "RADIO-HOSTS", colors.gray)
+    drawMenuButton("nav_verw_main", 18, "ZURUECK", colors.lightGray)
 
-    drawDebugOverlay(17)
+    drawDebugOverlay(18)
 end
 
 local function drawVerwUpdatesUI()
@@ -547,10 +554,11 @@ local function drawVerwUpdatesUI()
     drawMenuButton("update_signs", 8, "UPDATE: ANZEIGEN", colors.gray)
     drawMenuButton("update_gps", 10, "UPDATE: GPS-HOSTS", colors.gray)
     drawMenuButton("update_speakers", 12, "UPDATE: SPEAKER", colors.gray)
-    drawMenuButton("update_master", 14, "UPDATE: MASTER", colors.cyan, colors.black)
-    drawMenuButton("nav_verw_main", 16, "ZURUECK", colors.lightGray)
+    drawMenuButton("update_radio", 14, "UPDATE: RADIO-HOST", colors.gray)
+    drawMenuButton("update_master", 16, "UPDATE: MASTER", colors.cyan, colors.black)
+    drawMenuButton("nav_verw_main", 18, "ZURUECK", colors.lightGray)
 
-    drawDebugOverlay(17)
+    drawDebugOverlay(18)
 end
 
 local function drawVerwSettingsUI()
@@ -865,6 +873,9 @@ local function drawTerminalsUI()
     elseif terminalFilter == "speakers" then
         title = "--- LAUTSPRECHER ---"
         titleCol = colors.orange
+    elseif terminalFilter == "radio" then
+        title = "--- RADIO-HOSTS ---"
+        titleCol = colors.yellow
     end
     drawHeaderTitle(1, title, titleCol)
 
@@ -883,7 +894,7 @@ local function drawTerminalsUI()
             local displayLabel = tData.label or ("ID " .. tostring(tData.id))
             if tData.devType == "sign" and tData.preview and #tostring(tData.preview) > 0 then
                 displayLabel = "\"" .. tostring(tData.preview) .. "\""
-            elseif (tData.devType == "gps" or tData.devType == "speaker") and tData.preview and #tostring(tData.preview) > 0 then
+            elseif (tData.devType == "gps" or tData.devType == "speaker" or tData.devType == "radio") and tData.preview and #tostring(tData.preview) > 0 then
                 displayLabel = "[" .. tostring(tData.preview) .. "]"
             end
             local line1 = string.format("ID:%d | %s", tData.id, displayLabel)
@@ -1082,6 +1093,10 @@ local function handleAction(id)
         rednet.broadcast({ action = "update" }, UPDATE_PROTOCOL_SPK)
         addLog(0, true, "Sende GitHub-Update: Lautsprecher", "Master", "Master", nil)
         addDebugMsg("Update an Lautsprecher gesendet!")
+    elseif id == "update_radio" then
+        rednet.broadcast({ action = "update" }, spkCfg.protoRadioUpdate)
+        addLog(0, true, "Sende GitHub-Update: Radio-Host", "Master", "Master", nil)
+        addDebugMsg("Update an Radio-Host gesendet!")
     elseif id == "update_master" then
         applyMasterSelfUpdate()
     
@@ -1091,6 +1106,7 @@ local function handleAction(id)
     elseif id == "terminals_signs" then terminalFilter = "signs"; viewMode = "terminals"; scrollOffset = 0
     elseif id == "terminals_gps" then terminalFilter = "gps"; viewMode = "terminals"; scrollOffset = 0
     elseif id == "terminals_speakers" then terminalFilter = "speakers"; viewMode = "terminals"; scrollOffset = 0
+    elseif id == "terminals_radio" then terminalFilter = "radio"; viewMode = "terminals"; scrollOffset = 0
     
     elseif id == "geraete_del" then
         local idNum = editInput("Geraete ID zum Loeschen:", true)
@@ -1108,7 +1124,7 @@ local function handleAction(id)
         scrollOffset = 0
         addDebugMsg("Geraeteliste geleert.")
     elseif id == "geraete_ref" then
-        -- Sendet Status-Request an alle Geraete-Typen inklusive GPS-Hosts & Lautsprecher!
+        -- Sendet Status-Request an alle Geraete-Typen inklusive GPS-Hosts, Lautsprecher & Radio-Hosts!
         rednet.broadcast("STATUS_REQUEST", STATUS_PROTOCOL)
         rednet.broadcast("STATUS_REQUEST", UPDATE_PROTOCOL_TERM)
         rednet.broadcast("STATUS_REQUEST", CONFIG_PROTOCOL_DOOR)
@@ -1118,6 +1134,8 @@ local function handleAction(id)
         rednet.broadcast("STATUS_REQUEST", UPDATE_PROTOCOL_GPS)
         rednet.broadcast("STATUS_REQUEST", CONFIG_PROTOCOL_SPK)
         rednet.broadcast("STATUS_REQUEST", UPDATE_PROTOCOL_SPK)
+        rednet.broadcast("STATUS_REQUEST", spkCfg.protoRadioConfig)
+        rednet.broadcast("STATUS_REQUEST", spkCfg.protoRadioUpdate)
         addDebugMsg("Ping an alle Geraete gesendet...")
     
     elseif id == "console_clr" then
@@ -1213,6 +1231,10 @@ local function handleAction(id)
             action   = "set_radio_playlist",
             playlist = spkCfg.radioPlaylist
         }, CONFIG_PROTOCOL_SPK)
+        rednet.broadcast({
+            action   = "set_radio_playlist",
+            playlist = spkCfg.radioPlaylist
+        }, spkCfg.protoRadioConfig)
         addLog(0, true, string.format("Sende Radio (%d Tracks)", #spkCfg.radioPlaylist), "Master", "Master", nil)
         addDebugMsg(string.format("Radio gesendet (%d)", #spkCfg.radioPlaylist))
 
@@ -1356,7 +1378,7 @@ local function main()
         elseif event == "rednet_message" then
             local id, message, protocol = p1, p2, p3
 
-            if (protocol == UPDATE_PROTOCOL_TERM or protocol == UPDATE_PROTOCOL_DOOR or protocol == UPDATE_PROTOCOL_SIGN or protocol == UPDATE_PROTOCOL_GPS or protocol == UPDATE_PROTOCOL_SPK or protocol == CONFIG_PROTOCOL_DOOR or protocol == CONFIG_PROTOCOL_SIGN or protocol == CONFIG_PROTOCOL_GPS or protocol == CONFIG_PROTOCOL_SPK) and type(message) == "table" then
+            if (protocol == UPDATE_PROTOCOL_TERM or protocol == UPDATE_PROTOCOL_DOOR or protocol == UPDATE_PROTOCOL_SIGN or protocol == UPDATE_PROTOCOL_GPS or protocol == UPDATE_PROTOCOL_SPK or protocol == CONFIG_PROTOCOL_DOOR or protocol == CONFIG_PROTOCOL_SIGN or protocol == CONFIG_PROTOCOL_GPS or protocol == CONFIG_PROTOCOL_SPK or protocol == spkCfg.protoRadioUpdate or protocol == spkCfg.protoRadioConfig) and type(message) == "table" then
                 if message.action == "log_report" then
                     addLog(id, message.success, message.details, message.pos, message.label, protocol, message.preview, message.devType)
                     if viewMode == "console" or viewMode == "terminals" then drawUI() end
@@ -1380,6 +1402,12 @@ local function main()
                         radioPlaylist  = spkCfg.radioPlaylist or {},
                         isReply        = true
                     }, CONFIG_PROTOCOL_SPK)
+                elseif protocol == spkCfg.protoRadioConfig and message.action == "request_radio_sync" then
+                    rednet.send(id, {
+                        action    = "set_radio_playlist",
+                        playlist  = spkCfg.radioPlaylist or {},
+                        isReply   = true
+                    }, spkCfg.protoRadioConfig)
                 end
             elseif protocol == STATUS_PROTOCOL and (message == "EMERGENCY_ON" or message == "EMERGENCY_OFF") then
                 local existingPos = registeredTerminals[id] and registeredTerminals[id].pos or "Terminal"

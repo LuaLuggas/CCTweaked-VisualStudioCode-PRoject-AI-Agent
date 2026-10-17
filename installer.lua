@@ -16,11 +16,12 @@ local ROLES = {
     { key = "3", id = "Tuersensor",        title = "3: Tuersensor",        path = "programme/Tuersensor/startup.lua" },
     { key = "4", id = "TextAnzeige",       title = "4: TextAnzeige",       path = "programme/TextAnzeige/startup.lua" },
     { key = "5", id = "GPSHost",           title = "5: GPSHost",           path = "programme/GPSHost/startup.lua" },
-    { key = "6", id = "Lautsprecher",      title = "6: Lautsprecher",      path = "programme/Lautsprecher/startup.lua" }
+    { key = "6", id = "Lautsprecher",      title = "6: Lautsprecher",      path = "programme/Lautsprecher/startup.lua" },
+    { key = "7", id = "RadioHost",         title = "7: RadioHost",         path = "programme/RadioHost/startup.lua" }
 }
 
 local buttons = {}
-local statusText = "Rolle per Klick oder Taste 1-6 waehlen"
+local statusText = "Rolle per Klick oder Taste 1-7 waehlen"
 local statusCol  = colors.lightGray
 
 local function fetchFile(repoPath)
@@ -123,6 +124,7 @@ local function findRoleByArg(arg)
     elseif clean == "anzeige" or clean == "textanzeige" or clean == "signs" or clean == "sign" then return ROLES[4]
     elseif clean == "gps" or clean == "gpshost" then return ROLES[5]
     elseif clean == "lautsprecher" or clean == "speaker" or clean == "speakers" then return ROLES[6]
+    elseif clean == "radio" or clean == "radiohost" then return ROLES[7]
     end
     return nil
 end
@@ -168,7 +170,7 @@ local function drawMenu()
         addButton(r.key, btnX, y, btnW, r.title, colors.gray, colors.white)
     end
 
-    local quitY = math.min(h - 2, 16)
+    local quitY = math.min(h - 1, 18)
     addButton("quit", btnX, quitY, btnW, "ABBRECHEN [Q]", colors.lightGray, colors.black)
 
     term.setBackgroundColor(colors.black)
@@ -184,7 +186,7 @@ if args[1] then
     local roleObj = findRoleByArg(args[1])
     if not roleObj then
         printError("Unbekannte Rolle: " .. tostring(args[1]))
-        print("Verfuegbar: MasterComputer, EmergencyTerminal, Tuersensor, TextAnzeige, GPSHost, Lautsprecher (oder 1-6)")
+        print("Verfuegbar: MasterComputer, EmergencyTerminal, Tuersensor, TextAnzeige, GPSHost, Lautsprecher, RadioHost (oder 1-7)")
         return
     end
     print("Installiere Rolle: " .. roleObj.id .. " ...")

@@ -14,6 +14,7 @@ local CFG = {
     UPDATE_PROTOCOL   = "speaker_update",
     CONFIG_PROTOCOL   = "speaker_config",
     TRIGGER_PROTOCOL  = "speaker_trigger",
+    STREAM_PROTOCOL   = "bunker_radio_stream",
 
     CONFIG_FILE = "speaker_config.txt",
     TEMP_FILE   = "startup.update_tmp",
@@ -58,11 +59,15 @@ local state = {
     -- Vom Master synchronisierte Alarm- & Radio-Einstellungen
     emergencyUrl    = "",
     emergencyId     = "",
+    emergencyTitle  = "",
     lockdownUrl     = "",
     lockdownId      = "",
+    lockdownTitle   = "",
     alarmVolumePct  = 100,
     radioPlaylist   = {},
     radioTrackIdx   = 1,
+    curRadioTrackIdx = 1,
+    curRadioTitle   = "",
     marqueeOffset   = 0,
 
     -- Update-Historie
@@ -153,6 +158,26 @@ local function getMarqueeText(str, maxLen, offset)
     return doubled:sub(startIdx, startIdx + maxLen - 1)
 end
 
+state.cleanTitle = function(raw)
+    local s = tostring(raw or "")
+    s = s:gsub("\195\164", "ae"):gsub("\195\182", "oe"):gsub("\195\188", "ue")
+    s = s:gsub("\195\132", "Ae"):gsub("\195\150", "Oe"):gsub("\195\156", "Ue"):gsub("\195\159", "ss")
+    s = s:gsub("\226\128\147", "-"):gsub("\226\128\148", "-")
+    s = s:gsub("[^\32-\126]", "")
+    s = s:gsub("%s+", " "):gsub("^%s+", ""):gsub("%s+$", "")
+    return s
+end
+
+state.isBadTitle = function(t, id)
+    local s = tostring(t or ""):gsub("^%s+", ""):gsub("%s+$", "")
+    if s == "" or s == "Kein Video" then return true end
+    if id and s == tostring(id) then return true end
+    local low = s:lower()
+    if low:find("help me keep") or low:find("hosting is expensive") or low:find("patreon") then return true end
+    if low:find("http://") or low:find("https://") or low:find("youtu%.be") or low:find("youtube%.com") then return true end
+    return false
+end
+
 local function addLog(text)
     local w = term.getSize()
     local maxW = math.max(1, w - 2)
@@ -187,7 +212,7 @@ end
 
 local function hasPendingUrlChange()
     local trimmed = (state.fieldUrl or ""):gsub("^%s+", ""):gsub("%s+$", "")
-    return trimmed ~= state.localUrl
+    return state.focusUrl and (#trimmed > 0)
 end
 
 -- ==================================
@@ -207,8 +232,10 @@ local function saveConfig()
         userPlaying    = state.userPlaying,
         emergencyUrl   = state.emergencyUrl,
         emergencyId    = state.emergencyId,
+        emergencyTitle = state.emergencyTitle,
         lockdownUrl    = state.lockdownUrl,
         lockdownId     = state.lockdownId,
+        lockdownTitle  = state.lockdownTitle,
         alarmVolumePct = state.alarmVolumePct,
         radioPlaylist  = state.radioPlaylist,
         radioTrackIdx  = state.radioTrackIdx,
@@ -228,7 +255,7 @@ local function loadConfig()
             if type(data) == "table" then
                 if type(data.localUrl) == "string" then state.localUrl = data.localUrl end
                 if type(data.localVideoId) == "string" then state.localVideoId = data.localVideoId end
-                if type(data.localTitle) == "string" then state.localTitle = data.localTitle end
+                if type(data.localTitle) == "string" then state.localTitle = state.cleanTitle(data.localTitle) end
                 if type(data.volumePct) == "number" then state.volumePct = math.max(0, math.min(100, data.volumePct)) end
                 if type(data.loopEnabled) == "boolean" then state.loopEnabled = data.loopEnabled end
                 if type(data.triggerMode) == "number" and CFG.MODES[data.triggerMode] then state.triggerMode = data.triggerMode end
@@ -236,19 +263,29 @@ local function loadConfig()
                 if type(data.userPlaying) == "boolean" then state.userPlaying = data.userPlaying end
                 if type(data.emergencyUrl) == "string" then state.emergencyUrl = data.emergencyUrl end
                 if type(data.emergencyId) == "string" then state.emergencyId = data.emergencyId end
+                if type(data.emergencyTitle) == "string" then state.emergencyTitle = state.cleanTitle(data.emergencyTitle) end
                 if type(data.lockdownUrl) == "string" then state.lockdownUrl = data.lockdownUrl end
                 if type(data.lockdownId) == "string" then state.lockdownId = data.lockdownId end
+                if type(data.lockdownTitle) == "string" then state.lockdownTitle = state.cleanTitle(data.lockdownTitle) end
                 if type(data.alarmVolumePct) == "number" then state.alarmVolumePct = math.max(0, math.min(100, data.alarmVolumePct)) end
                 if type(data.radioPlaylist) == "table" then state.radioPlaylist = data.radioPlaylist end
                 if type(data.radioTrackIdx) == "number" then state.radioTrackIdx = math.max(1, data.radioTrackIdx) end
                 if type(data.lastUpdateTime) == "string" then state.lastUpdateTime = data.lastUpdateTime end
                 if type(data.lastUpdateStat) == "string" then state.lastUpdateStat = data.lastUpdateStat end
-                state.fieldUrl = state.localUrl
+
+                -- Falls localVideoId durch alten API-Werbeeintrag ueberschrieben wurde, aus localUrl wiederherstellen
+                if state.localVideoId == "9Se1cKmJ_Ik" and state.localUrl ~= "" then
+                    local origId = extractYoutubeId(state.localUrl)
+                    if origId ~= "" and origId ~= "9Se1cKmJ_Ik" then
+                        state.localVideoId = origId
+                    end
+                end
+                state.fieldUrl = ""
                 return true
             end
         end
     end
-    state.fieldUrl = state.localUrl
+    state.fieldUrl = ""
     return false
 end
 
@@ -268,15 +305,29 @@ end
 
 local function getPreviewString()
     local modeName = CFG.MODES[state.triggerMode] or "MANUELL"
-    local idInfo = (state.localVideoId ~= "") and state.localVideoId or "Kein Link"
+    local songInfo = "Kein Video"
+    if modeName == "RADIO" then
+        if state.curRadioTitle and state.curRadioTitle ~= "" then
+            songInfo = state.curRadioTitle
+        elseif type(state.radioPlaylist) == "table" and #state.radioPlaylist > 0 then
+            local curIdx = math.max(1, math.min(#state.radioPlaylist, state.radioTrackIdx or 1))
+            local trk = state.radioPlaylist[curIdx]
+            songInfo = (trk and trk.title and not state.isBadTitle(trk.title, trk.id)) and trk.title or "Radio-Track"
+        else
+            songInfo = "Bunker-Radio"
+        end
+    elseif state.localVideoId ~= "" then
+        songInfo = (not state.isBadTitle(state.localTitle, state.localVideoId)) and state.localTitle or "YouTube-Video"
+    end
+
     if state.lockdownActive then
         return "LOCKDOWN-ALARM"
     elseif state.emergencyActive then
         return "EMERGENCY-ALARM"
     elseif state.activeTargetId then
-        return "Spielt (" .. modeName .. ": " .. idInfo .. ")"
+        return "Spielt (" .. modeName .. ": " .. songInfo:sub(1, 18) .. ")"
     else
-        return modeName .. " (" .. idInfo .. ")"
+        return modeName .. " (" .. songInfo:sub(1, 18) .. ")"
     end
 end
 
@@ -383,13 +434,7 @@ local function getDesiredPlayback()
     elseif mode == "FUNK" then
         shouldPlay = state.remoteTriggered
     elseif mode == "RADIO" then
-        if type(state.radioPlaylist) == "table" and #state.radioPlaylist > 0 then
-            local idx = math.max(1, math.min(#state.radioPlaylist, state.radioTrackIdx or 1))
-            local item = state.radioPlaylist[idx]
-            if item and item.id and item.id ~= "" then
-                return item.id, vol, false
-            end
-        end
+        -- Radio-Stream laeuft synchron ueber den zentralen RadioHost per Rednet (DFPWM Chunks)
         return nil, 0, false
     end
 
@@ -576,7 +621,7 @@ local function syncAudioEngine()
     end
 end
 
--- Falls jemand statt Link/ID einen Suchbegriff eingibt, per API nach der Video-ID suchen
+-- Loest Link/ID oder Suchbegriff auf und laedt den echten Videotitel ueber YouTube oEmbed
 local function resolveInputToVideoId(rawInput, targetType)
     local trimmed = tostring(rawInput or ""):gsub("^%s+", ""):gsub("%s+$", "")
     if trimmed == "" then
@@ -585,10 +630,10 @@ local function resolveInputToVideoId(rawInput, targetType)
     local directId = extractYoutubeId(trimmed)
     if directId ~= "" then
         if http and state.searchUrl == nil then
-            local sUrl = CFG.API_URL .. "?v=" .. CFG.API_VERSION .. "&search=" .. textutils.urlEncode(directId)
-            state.searchUrl    = sUrl
+            local oUrl = "https://www.youtube.com/oembed?url=https://www.youtube.com/watch?v=" .. directId .. "&format=json"
+            state.searchUrl    = oUrl
             state.searchTarget = targetType
-            http.request(sUrl)
+            http.request(oUrl)
         end
         return directId
     end
@@ -597,7 +642,7 @@ local function resolveInputToVideoId(rawInput, targetType)
         state.searchUrl    = sUrl
         state.searchTarget = targetType
         http.request(sUrl)
-        addLog("Suche YouTube-ID fuer: " .. trimmed:sub(1, 20))
+        addLog("Suche Video: " .. trimmed:sub(1, 20))
     end
     return ""
 end
@@ -621,6 +666,13 @@ local function drawUI()
     hitboxes.volDec     = nil
     hitboxes.volBar     = nil
     hitboxes.volInc     = nil
+
+    local modeName    = CFG.MODES[state.triggerMode] or "MANUELL"
+    local isRadioMode = (modeName == "RADIO")
+    local fieldX      = 2
+    local btnW        = 10
+    local btnX        = w - btnW
+    local fieldW      = math.max(10, btnX - fieldX - 2)
 
     -- 1. Kopfzeile
     term.setCursorPos(2, 1)
@@ -653,16 +705,16 @@ local function drawUI()
     elseif state.audioError then
         term.setTextColor(colors.red)
         term.write("FEHLER: " .. tostring(state.audioError):sub(1, w - 18))
+    elseif isRadioMode then
+        term.setTextColor(colors.lime)
+        term.write("EMPFANG (BUNKER-RADIO)")
     elseif state.activeTargetId then
         term.setTextColor(colors.lime)
-        term.write("SPIELT [" .. tostring(state.activeTargetId) .. "]")
+        term.write("SPIELT (" .. modeName .. ")")
     else
         term.setTextColor(colors.green)
         term.write("BEREIT (" .. tostring(#state.speakers) .. " Speaker)")
     end
-
-    local modeName = CFG.MODES[state.triggerMode] or "MANUELL"
-    local isRadioMode = (modeName == "RADIO")
 
     if isRadioMode then
         -- 3. Radio-Wiedergabe & Track-Titel (Marquee)
@@ -670,20 +722,20 @@ local function drawUI()
         term.setBackgroundColor(colors.black)
         term.setTextColor(colors.cyan)
         term.write("BUNKER-RADIO:")
+        local curIdx = state.curRadioTrackIdx or state.radioTrackIdx or 1
         if type(state.radioPlaylist) == "table" and #state.radioPlaylist > 0 then
-            local curIdx = math.max(1, math.min(#state.radioPlaylist, state.radioTrackIdx or 1))
+            curIdx = math.max(1, math.min(#state.radioPlaylist, curIdx))
             term.setTextColor(colors.white)
             term.write(string.format(" Track %d/%d", curIdx, #state.radioPlaylist))
         else
-            term.setTextColor(colors.yellow)
-            term.write(" [Keine Playlist im Master]")
+            term.setTextColor(colors.white)
+            term.write(string.format(" Track %d", curIdx))
         end
 
-        local curTrackTitle = "Kein Track verfuegbar"
-        if type(state.radioPlaylist) == "table" and #state.radioPlaylist > 0 then
-            local curIdx = math.max(1, math.min(#state.radioPlaylist, state.radioTrackIdx or 1))
+        local curTrackTitle = (state.curRadioTitle and state.curRadioTitle ~= "") and state.curRadioTitle or "Kein Track verfuegbar"
+        if curTrackTitle == "Kein Track verfuegbar" and type(state.radioPlaylist) == "table" and #state.radioPlaylist > 0 then
             local trk = state.radioPlaylist[curIdx]
-            curTrackTitle = (trk and trk.title and trk.title ~= "") and trk.title or ((trk and trk.id) or "Unbekannt")
+            curTrackTitle = (trk and trk.title and not state.isBadTitle(trk.title, trk.id)) and trk.title or "YouTube-Video"
         end
 
         term.setCursorPos(2, 6)
@@ -696,15 +748,17 @@ local function drawUI()
         term.setCursorPos(2, 8)
         term.setBackgroundColor(colors.black)
         term.setTextColor(colors.lightGray)
-        term.write("Auto-Play aktiv (Playlist im Master verwaltet)")
+        term.write("Live-Stream aktiv (Zentraler Radio-Host)")
     else
-        -- 3. Eingabefeld fuer lokales YouTube-Video & Titel-Marquee
+        -- 3. Eingabefeld fuer lokales YouTube-Video (zeigt im Ruhezustand den Videotitel als Lauftext!)
         term.setCursorPos(2, 5)
         term.setBackgroundColor(colors.black)
         term.setTextColor(colors.lightGray)
-        local titleText = (state.localTitle ~= "" and state.localTitle ~= "Kein Video") and state.localTitle or ((state.localVideoId ~= "") and ("ID: " .. state.localVideoId) or "Kein Video")
-        local titleMarquee = getMarqueeText("Titel: " .. titleText, w - 10, state.marqueeOffset)
-        term.write(titleMarquee)
+        if state.focusUrl then
+            term.write("YouTube-Link einfuegen (Strg+V):")
+        else
+            term.write("Aktuelles Video (Klick zum Aendern):")
+        end
 
         local clrX = w - 6
         term.setCursorPos(clrX, 5)
@@ -713,24 +767,27 @@ local function drawUI()
         term.write(" CLR ")
         hitboxes.clearBtn = { x1 = clrX, x2 = clrX + 4, y = 5 }
 
-        local fieldX = 2
-        local btnW   = 10
-        local btnX   = w - btnW
-        local fieldW = math.max(10, btnX - fieldX - 2)
-
         term.setCursorPos(fieldX, 6)
         if state.focusUrl then
             term.setBackgroundColor(colors.lightGray)
             term.setTextColor(colors.black)
+            local dispUrl = state.fieldUrl or ""
+            if #dispUrl > fieldW then
+                dispUrl = dispUrl:sub(#dispUrl - fieldW + 1)
+            end
+            term.write(pad(dispUrl, fieldW))
         else
             term.setBackgroundColor(colors.gray)
-            term.setTextColor(colors.white)
+            if state.localVideoId ~= "" then
+                term.setTextColor(colors.white)
+                local songTitle = (not state.isBadTitle(state.localTitle, state.localVideoId)) and state.localTitle or "Lade Videotitel..."
+                local songMarquee = getMarqueeText(songTitle, fieldW - 2, state.marqueeOffset)
+                term.write(" " .. pad(songMarquee, fieldW - 2) .. " ")
+            else
+                term.setTextColor(colors.lightGray)
+                term.write(pad(" [ Hier klicken & Link einfuegen ]", fieldW))
+            end
         end
-        local dispUrl = state.fieldUrl or ""
-        if #dispUrl > fieldW then
-            dispUrl = dispUrl:sub(#dispUrl - fieldW + 1)
-        end
-        term.write(pad(dispUrl, fieldW))
         hitboxes.urlField = { x1 = fieldX, x2 = fieldX + fieldW - 1, y = 6 }
 
         local isUrlDirty = hasPendingUrlChange()
@@ -849,14 +906,14 @@ local function drawUI()
     hitboxes.volBar = { x1 = barX + 3, x2 = barX + 2 + bW, y = volY, width = bW }
     hitboxes.volInc = { x1 = barX + 3 + bW, x2 = barX + 5 + bW, y = volY }
 
-    -- 7. Master-Alarm-Info & Update-Zeitstempel
+    -- 7. Master-Alarm-Info & Update-Zeitstempel (zeigt echte Videonamen statt IDs!)
     term.setBackgroundColor(colors.black)
     term.setTextColor(colors.lightGray)
     term.setCursorPos(2, 14)
-    local emStat = (state.emergencyId ~= "") and state.emergencyId or "aus"
-    local ldStat = (state.lockdownId ~= "") and state.lockdownId or "aus"
-    local alarmInfo = string.format("Alarm-Sync: EM[%s] LD[%s] Vol:%d%%", emStat, ldStat, state.alarmVolumePct)
-    term.write(alarmInfo:sub(1, w - 2))
+    local emStat = (state.emergencyId ~= "") and ((not state.isBadTitle(state.emergencyTitle, state.emergencyId)) and state.emergencyTitle or "Gesetzt") or "Aus"
+    local ldStat = (state.lockdownId ~= "") and ((not state.isBadTitle(state.lockdownTitle, state.lockdownId)) and state.lockdownTitle or "Gesetzt") or "Aus"
+    local alarmInfo = string.format("Alert(%d%%): EM[%s] LD[%s]", state.alarmVolumePct, emStat, ldStat)
+    term.write(pad(getMarqueeText(alarmInfo, w - 2, state.marqueeOffset), w - 2))
 
     term.setCursorPos(2, 15)
     local updInfo = string.format("letz. Update: [%s] [%s]", tostring(state.lastUpdateTime), tostring(state.lastUpdateStat))
@@ -870,7 +927,7 @@ local function drawUI()
         term.write(pad(entry.text, w - 2))
     end
 
-    if state.focusUrl then
+    if state.focusUrl and not isRadioMode then
         term.setBackgroundColor(colors.lightGray)
         term.setTextColor(colors.black)
         local curX = fieldX + math.min(#(state.fieldUrl or ""), fieldW - 1)
@@ -885,28 +942,22 @@ end
 -- KOMMENTAR: AKTIONEN, TRIGGER & REMOTE-UPDATE
 -- ==================================
 local function applyUrlField()
-    state.focusUrl = false
     local trimmed = (state.fieldUrl or ""):gsub("^%s+", ""):gsub("%s+$", "")
-    state.localUrl  = trimmed
-    state.fieldUrl  = trimmed
+    state.focusUrl = false
+    state.fieldUrl = ""
 
     if trimmed == "" then
-        state.localVideoId = ""
-        state.localTitle   = "Kein Video"
-        saveConfig()
-        stopAllSpeakers()
-        addLog("Video-Link geleert.")
-        sendReport(true, "Video geleert")
+        state.dirty = true
         return
     end
 
+    state.localUrl = trimmed
     local vid = resolveInputToVideoId(trimmed, "local")
     if vid ~= "" then
         state.localVideoId = vid
-        state.localTitle   = vid
+        state.localTitle   = "Lade Videotitel..."
         saveConfig()
-        addLog("Video-ID gespeichert: " .. vid)
-        sendReport(true, "Video gesetzt: " .. vid)
+        addLog("Lade Videotitel...")
         if state.activeTargetId and not state.emergencyActive and not state.lockdownActive then
             state.activeTargetId = nil
         end
@@ -917,11 +968,19 @@ end
 
 local function applyMasterAlarmConfig(msg, isReply)
     if type(msg) ~= "table" then return end
+    if type(msg.emergencyTitle) == "string" then
+        state.emergencyTitle = state.cleanTitle(msg.emergencyTitle)
+    end
+    if type(msg.lockdownTitle) == "string" then
+        state.lockdownTitle = state.cleanTitle(msg.lockdownTitle)
+    end
     if type(msg.emergencyUrl) == "string" then
         state.emergencyUrl = msg.emergencyUrl
         state.emergencyId  = extractYoutubeId(msg.emergencyUrl)
         if state.emergencyUrl ~= "" and state.emergencyId == "" then
             resolveInputToVideoId(state.emergencyUrl, "emergency")
+        elseif state.emergencyId ~= "" and state.isBadTitle(state.emergencyTitle, state.emergencyId) then
+            resolveInputToVideoId(state.emergencyId, "emergency")
         end
     end
     if type(msg.lockdownUrl) == "string" then
@@ -929,6 +988,8 @@ local function applyMasterAlarmConfig(msg, isReply)
         state.lockdownId  = extractYoutubeId(msg.lockdownUrl)
         if state.lockdownUrl ~= "" and state.lockdownId == "" then
             resolveInputToVideoId(state.lockdownUrl, "lockdown")
+        elseif state.lockdownId ~= "" and state.isBadTitle(state.lockdownTitle, state.lockdownId) then
+            resolveInputToVideoId(state.lockdownId, "lockdown")
         end
     end
     if type(msg.alarmVol) == "number" then
@@ -936,7 +997,7 @@ local function applyMasterAlarmConfig(msg, isReply)
     end
     saveConfig()
     syncAudioEngine()
-    addLog(isReply and "Sync: Alarm-Daten vom Master geladen." or "Master: Alarm-Links aktualisiert!")
+    addLog(isReply and "Sync: Alarm-Daten vom Master geladen." or "Master: Alarm-Sounds aktualisiert!")
     sendReport(true, string.format("Alarm-Sync aktiv (Vol:%d%%)", state.alarmVolumePct))
     state.dirty = true
 end
@@ -1051,6 +1112,10 @@ end
 -- KOMMENTAR: HAUPTSCHLEIFE (EVENTS)
 -- ==================================
 local function main()
+    if state.localVideoId ~= "" and state.isBadTitle(state.localTitle, state.localVideoId) then
+        resolveInputToVideoId(state.localVideoId, "local")
+    end
+
     if state.modem then
         refreshGpsCache()
         rednet.broadcast(CFG.MSG_STATUS, CFG.PROTOCOL)
@@ -1078,7 +1143,7 @@ local function main()
         if ev == "speaker_audio_empty" or ev == "speaker_feed" then
             feedNextAudioChunk()
 
-        -- 2. HTTP-Antworten fuer Audio-Stream & YouTube-Suche
+        -- 2. HTTP-Antworten fuer Audio-Stream & YouTube-Titel/Suche
         elseif ev == "http_success" then
             local url, handle = p1, p2
             if url == state.loadingUrl then
@@ -1093,26 +1158,56 @@ local function main()
                 local body = handle.readAll()
                 handle.close()
                 local results = textutils.unserializeJSON(body)
-                if type(results) == "table" and results[1] and type(results[1].id) == "string" then
-                    local foundId = results[1].id
+                if type(results) == "table" and type(results.title) == "string" and #results.title > 0 then
+                    -- Offizielle YouTube oEmbed Antwort
+                    local clean = state.cleanTitle(results.title)
                     if state.searchTarget == "local" then
-                        state.localVideoId = foundId
-                        state.localTitle   = tostring(results[1].name or foundId)
+                        state.localTitle = (clean ~= "" and clean or "YouTube-Video")
                         saveConfig()
-                        addLog("Gefunden: " .. state.localTitle:sub(1, 24))
-                        sendReport(true, "Video: " .. foundId)
-                        syncAudioEngine()
+                        addLog("Video: " .. state.localTitle:sub(1, 28))
+                        sendReport(true)
                     elseif state.searchTarget == "emergency" then
-                        state.emergencyId = foundId
+                        state.emergencyTitle = clean
                         saveConfig()
-                        syncAudioEngine()
                     elseif state.searchTarget == "lockdown" then
-                        state.lockdownId = foundId
+                        state.lockdownTitle = clean
                         saveConfig()
-                        syncAudioEngine()
                     end
-                else
-                    addLog("Kein YouTube-Treffer gefunden!")
+                elseif type(results) == "table" then
+                    -- Cloud-Suchantwort (filtert den Patreon-Werbeeintrag 9Se1cKmJ_Ik heraus!)
+                    local foundId, foundTitle = nil, nil
+                    for _, item in ipairs(results) do
+                        if type(item) == "table" and type(item.id) == "string" and item.id ~= "9Se1cKmJ_Ik" then
+                            local cName = state.cleanTitle(item.name)
+                            if not state.isBadTitle(cName, item.id) then
+                                foundId    = item.id
+                                foundTitle = cName
+                                break
+                            end
+                        end
+                    end
+                    if foundId then
+                        if state.searchTarget == "local" then
+                            state.localVideoId = foundId
+                            state.localTitle   = foundTitle
+                            saveConfig()
+                            addLog("Video: " .. state.localTitle:sub(1, 28))
+                            sendReport(true)
+                            syncAudioEngine()
+                        elseif state.searchTarget == "emergency" then
+                            state.emergencyId    = foundId
+                            state.emergencyTitle = foundTitle
+                            saveConfig()
+                            syncAudioEngine()
+                        elseif state.searchTarget == "lockdown" then
+                            state.lockdownId    = foundId
+                            state.lockdownTitle = foundTitle
+                            saveConfig()
+                            syncAudioEngine()
+                        end
+                    else
+                        addLog("Kein YouTube-Treffer gefunden!")
+                    end
                 end
                 state.dirty = true
             else
@@ -1130,7 +1225,11 @@ local function main()
                 state.dirty          = true
             elseif url == state.searchUrl then
                 state.searchUrl = nil
-                addLog("YouTube-Suche fehlgeschlagen!")
+                if state.searchTarget == "local" and state.localTitle == "Lade Videotitel..." then
+                    state.localTitle = "YouTube-Video"
+                    saveConfig()
+                    state.dirty = true
+                end
             end
 
         -- 3. Mausklicks & Lautstaerke-Slider
@@ -1158,18 +1257,35 @@ local function main()
 
             if ev == "mouse_click" and not handled then
                 if hitboxes.urlField and y == hitboxes.urlField.y and x >= hitboxes.urlField.x1 and x <= hitboxes.urlField.x2 then
-                    state.focusUrl   = true
-                    state.freshFocus = false
-                    state.dirty      = true
+                    if not state.focusUrl then
+                        state.focusUrl = true
+                        state.fieldUrl = ""
+                    end
+                    state.dirty = true
                 elseif hitboxes.clearBtn and y == hitboxes.clearBtn.y and x >= hitboxes.clearBtn.x1 and x <= hitboxes.clearBtn.x2 then
-                    state.fieldUrl   = ""
-                    state.focusUrl   = true
-                    state.freshFocus = false
-                    state.dirty      = true
+                    if state.focusUrl and #(state.fieldUrl or "") > 0 then
+                        state.fieldUrl = ""
+                    else
+                        state.localUrl     = ""
+                        state.localVideoId = ""
+                        state.localTitle   = "Kein Video"
+                        state.fieldUrl     = ""
+                        state.focusUrl     = false
+                        saveConfig()
+                        stopAllSpeakers()
+                        addLog("Video geloescht.")
+                        sendReport(true, "Kein Video")
+                    end
+                    state.dirty = true
                 elseif hitboxes.saveUrlBtn and y == hitboxes.saveUrlBtn.y and x >= hitboxes.saveUrlBtn.x1 and x <= hitboxes.saveUrlBtn.x2 then
                     applyUrlField()
                 elseif hitboxes.playBtn and y == hitboxes.playBtn.y and x >= hitboxes.playBtn.x1 and x <= hitboxes.playBtn.x2 then
-                    state.focusUrl = false
+                    if hasPendingUrlChange() then
+                        applyUrlField()
+                    else
+                        state.focusUrl = false
+                        state.fieldUrl = ""
+                    end
                     local isPlayingLocal = (state.activeTargetId ~= nil and not state.emergencyActive and not state.lockdownActive)
                     if isPlayingLocal then
                         state.userPlaying     = false
@@ -1180,9 +1296,6 @@ local function main()
                         stopAllSpeakers()
                         addLog("Wiedergabe gestoppt.")
                     else
-                        if hasPendingUrlChange() then
-                            applyUrlField()
-                        end
                         if state.localVideoId == "" then
                             addLog("Bitte erst einen YouTube-Link setzen!")
                         else
@@ -1200,12 +1313,14 @@ local function main()
                     state.dirty = true
                 elseif hitboxes.loopBtn and y == hitboxes.loopBtn.y and x >= hitboxes.loopBtn.x1 and x <= hitboxes.loopBtn.x2 then
                     state.focusUrl    = false
+                    state.fieldUrl    = ""
                     state.loopEnabled = not state.loopEnabled
                     saveConfig()
                     addLog(state.loopEnabled and "Loop aktiviert." or "Loop deaktiviert (1x abspielen).")
                     state.dirty = true
                 elseif hitboxes.modeBtn and y == hitboxes.modeBtn.y and x >= hitboxes.modeBtn.x1 and x <= hitboxes.modeBtn.x2 then
                     state.focusUrl        = false
+                    state.fieldUrl        = ""
                     state.triggerMode     = (state.triggerMode % #CFG.MODES) + 1
                     state.rsTriggered     = false
                     state.playerTriggered = false
@@ -1226,6 +1341,7 @@ local function main()
                     state.dirty = true
                 else
                     state.focusUrl = false
+                    state.fieldUrl = ""
                     state.dirty    = true
                 end
             end
@@ -1300,6 +1416,22 @@ local function main()
                         if CFG.MODES[state.triggerMode] == "RADIO" then
                             stopAllSpeakers()
                             syncAudioEngine()
+                        end
+                        state.dirty = true
+                    end
+                end
+
+            elseif protocol == CFG.STREAM_PROTOCOL and not state.updatingState then
+                if CFG.MODES[state.triggerMode] == "RADIO" and not state.emergencyActive and not state.lockdownActive then
+                    if type(message) == "table" and message.action == "radio_chunk" and message.chunk then
+                        state.curRadioTrackIdx = message.trackIdx or 1
+                        state.curRadioTitle    = message.trackTitle or "Radio-Track"
+                        local vol = (state.volumePct / 100) * 3.0
+                        if vol > 0.001 and #state.speakers > 0 then
+                            local ok, pcm = pcall(state.decoder, message.chunk)
+                            if ok and pcm then
+                                pushBufferToSpeakers(pcm, vol)
+                            end
                         end
                         state.dirty = true
                     end

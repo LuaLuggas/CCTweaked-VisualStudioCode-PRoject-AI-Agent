@@ -12,7 +12,7 @@ Diese Datei listet alle aktuell in den Skripten verwendeten sowie für den weite
 | :--- | :--- | :--- | :--- |
 | **`modem`** (Wireless / Ender Modem) | `peripheral.find("modem")` / `peripheral.call(name, "isWireless")` | Alle Skripte | `rednet.open(name)`, `rednet.close(name)`, `modem.open(channel)`, `modem.close(channel)`, `modem.transmit(replyCh, ch, payload)`<br>Events: `rednet_message`, `modem_message` |
 | **`monitor`** (Advanced Monitor) | `peripheral.find("monitor")` | `EmergencyTerminal`, `TextAnzeige` | `setTextScale(scale)`, `getSize()`, `setCursorPos(x, y)`, `setBackgroundColor(col)`, `setTextColor(col)`, `clear()`, `write(text)`, `setPaletteColor(col, r, g, b)`<br>Events: `monitor_touch`, `monitor_resize` |
-| **`speaker`** (CC:Tweaked Speaker) | `peripheral.find("speaker")` | `Lautsprecher` | `playAudio(pcmBuffer, volume)` (gibt `true` zurück wenn akzeptiert, `false` wenn Puffer voll; `volume` von `0.0` bis `3.0`), `stop()`<br>Audio-Dekodierung: `require("cc.audio.dfpwm").make_decoder()`<br>Event: `speaker_audio_empty` |
+| **`speaker`** (CC:Tweaked Speaker) | `peripheral.find("speaker")` | `Lautsprecher`, `RadioHost` (Studio-Playback) | `playAudio(pcmBuffer, volume)` (gibt `true` zurück wenn akzeptiert, `false` wenn Puffer voll; `volume` von `0.0` bis `3.0`), `stop()`<br>Audio-Dekodierung: `require("cc.audio.dfpwm").make_decoder()`<br>Event: `speaker_audio_empty` |
 | **Redstone (Intern)** | `rs` / `redstone` API | `Tuersensor`, `Lautsprecher` | `rs.setOutput("top", true/false)` (`Tuersensor`), `rs.getSides()`, `rs.getInput(side)` (`Lautsprecher` im Modus `REDSTONE`)<br>Event: `redstone` |
 
 ### 1.2 Advanced Peripherals (Bereits aktiv)
