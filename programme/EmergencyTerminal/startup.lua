@@ -27,10 +27,11 @@ local MSG_UNLOCK = "LOCKDOWN_OFF"
 local MSG_STATUS = "STATUS_REQUEST"
 
 -- ==================================
--- DATEIWEGE FUER UPDATES UND BACKUPS
+-- DATEIWEGE & GITHUB-URL FUER UPDATES
 -- ==================================
 local TEMP_FILE = "startup.update_tmp"
 local BACKUP_FILE = "startup.backup"
+local GITHUB_URL = "https://raw.githubusercontent.com/LuaLuggas/CCTweaked-VisualStudioCode-PRoject-AI-Agent/main/programme/EmergencyTerminal/startup.lua"
 
 -- ==================================
 -- PERIPHERIE-ERKENNUNG (MONITOR & MODEM)
@@ -327,111 +328,83 @@ local function setLockdownState(newState, broadcast)
 end
 
 -- ==================================
--- UPDATE-MECHANISMUS (DOWNLOAD & INSTALLATION)
+-- UPDATE-MECHANISMUS (GITHUB DOWNLOAD & INSTALLATION)
 -- ==================================
-local function applyUpdate(pasteCode)
+local function applyUpdate()
     updatingState = true
     customButtonText = "Updating..."
     draw()
 
-    if type(pasteCode) ~= "string" or pasteCode == "" then
-        debug("Update abgebrochen: Kein Pastebin-Code angegeben.")
-        sendReport(false, "Update abgebrochen: Kein Code")
-        updatingState = false
-        draw()
-        return false
-    end
-
-    debug("Update wird vorbereitet: " .. pasteCode)
-
-    if fs.exists(TEMP_FILE) then
-        fs.delete(TEMP_FILE)
-    end
-
-    local downloadOK, downloadErr = pcall(function()
-        local ok = shell.run("pastebin", "get", pasteCode, TEMP_FILE)
-        if not ok then error("pastebin get ist fehlgeschlagen.") end
-    end)
-
-    if not downloadOK then
-        local errStr = "Download fehlgeschlagen"
-        debug(errStr .. ": " .. tostring(downloadErr))
-        sendReport(false, errStr)
+    local function fail(reportText)
+        debug("Update fehlgeschlagen: " .. reportText)
+        sendReport(false, reportText)
         if fs.exists(TEMP_FILE) then fs.delete(TEMP_FILE) end
         updatingState = false
         draw()
         return false
     end
 
-    if not fs.exists(TEMP_FILE) then
-        debug("Update fehlgeschlagen: Download-Datei fehlt.")
-        sendReport(false, "Download-Datei fehlt")
-        updatingState = false
-        draw()
-        return false
+    if not http then
+        return fail("HTTP-API inaktiv")
     end
 
-    local file = fs.open(TEMP_FILE, "r")
-    if not file then
-        debug("Update fehlgeschlagen: Datei nicht lesbar.")
-        sendReport(false, "Datei nicht lesbar")
-        updatingState = false
-        draw()
-        return false
+    debug("Lade Update von GitHub...")
+    local url = GITHUB_URL .. "?cb=" .. string.format("%d", os.epoch("utc"))
+    local response, httpErr, failResp = http.get(url)
+    if not response then
+        local why = tostring(httpErr)
+        if failResp and failResp.getResponseCode then
+            why = "HTTP " .. tostring(failResp.getResponseCode())
+            pcall(failResp.close)
+        end
+        return fail("Download fehlgeschlagen (" .. why:sub(1, 24) .. ")")
     end
 
-    local content = file.readAll()
-    file.close()
+    local content = response.readAll()
+    response.close()
 
     if not content or #content == 0 then
-        debug("Update fehlgeschlagen: Datei ist leer.")
-        fs.delete(TEMP_FILE)
-        sendReport(false, "Datei ist leer")
-        updatingState = false
-        draw()
-        return false
+        return fail("Datei ist leer")
     end
 
+    if content:match("^%s*<!DOCTYPE") or content:match("^%s*<[Hh][Tt][Mm][Ll]") then
+        return fail("HTML statt Lua erhalten")
+    end
+
+    local tf = fs.open(TEMP_FILE, "w")
+    if not tf then
+        return fail("Temp-Datei nicht schreibbar")
+    end
+    tf.write(content)
+    tf.close()
+
     local compiled, syntaxErr = loadfile(TEMP_FILE)
+    fs.delete(TEMP_FILE)
     if not compiled then
         debug("Syntaxfehler im Update: " .. tostring(syntaxErr))
-        fs.delete(TEMP_FILE)
-        sendReport(false, "Syntaxfehler im Code")
-        updatingState = false
-        draw()
-        return false
+        return fail("Syntaxfehler im Code")
     end
 
     debug("Download und Syntaxpruefung erfolgreich.")
 
     if fs.exists(BACKUP_FILE) then fs.delete(BACKUP_FILE) end
-    local hadStartup = fs.exists("startup")
-
-    if hadStartup then
-        local backupOK, backupErr = pcall(function() fs.move("startup", BACKUP_FILE) end)
-        if not backupOK then
-            debug("Backup fehlgeschlagen: " .. tostring(backupErr))
-            sendReport(false, "Backup fehlgeschlagen")
-            updatingState = false
-            draw()
-            return false
-        end
+    if fs.exists("startup.lua") then
+        pcall(fs.copy, "startup.lua", BACKUP_FILE)
+    elseif fs.exists("startup") then
+        pcall(fs.copy, "startup", BACKUP_FILE)
     end
 
-    local installOK, installErr = pcall(function() fs.move(TEMP_FILE, "startup") end)
-    if not installOK then
-        debug("Installation fehlgeschlagen: " .. tostring(installErr))
-        if hadStartup and fs.exists(BACKUP_FILE) and not fs.exists("startup") then
-            pcall(function() fs.move(BACKUP_FILE, "startup") end)
-        end
-        sendReport(false, "Installation fehlgeschlagen")
-        updatingState = false
-        draw()
-        return false
+    local newFile = fs.open("startup.lua", "w")
+    if not newFile then
+        return fail("Schreibfehler startup.lua")
     end
+    newFile.write(content)
+    newFile.close()
+
+    if fs.exists("startup") then fs.delete("startup") end
 
     debug("Update installiert.")
-    sendReport(true, "Update erfolgreich (" .. pasteCode .. ")")
+    sendReport(true, "Update erfolgreich (GitHub)")
 
     customButtonText = "Neustart..."
     draw()

@@ -1,0 +1,3 @@
+# Rolle: Tuersensor (Player-Detector Tuer- & Schleusensteuerung)
+programme/Tuersensor/startup.lua
+

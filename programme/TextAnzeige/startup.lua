@@ -13,6 +13,7 @@ local CFG = {
     CONFIG_FILE       = "sign_config.txt",
     TEMP_FILE         = "startup.update_tmp",
     BACKUP_FILE       = "startup.backup",
+    GITHUB_URL        = "https://raw.githubusercontent.com/LuaLuggas/CCTweaked-VisualStudioCode-PRoject-AI-Agent/main/programme/TextAnzeige/startup.lua",
 
     MASTER_ID   = 24,
     COMPUTER_ID = os.getComputerID(),
@@ -1300,28 +1301,9 @@ local function triggerAlertState()
 end
 
 -- ==================================
--- KOMMENTAR: REMOTE-UPDATE FUNKTION (UEBER MASTER)
+-- KOMMENTAR: REMOTE-UPDATE FUNKTION (UEBER GITHUB & MASTER)
 -- ==================================
-local function extractPasteId(input)
-    if type(input) ~= "string" then return nil end
-    input = input:gsub("^%s+", ""):gsub("%s+$", "")
-    input = input:gsub("[?#].*$", ""):gsub("/+$", "")
-
-    local patterns = {
-        "^([%a%d]+)$",
-        "^https?://pastebin%.com/raw/([%a%d]+)$",
-        "^https?://pastebin%.com/([%a%d]+)$",
-        "^pastebin%.com/raw/([%a%d]+)$",
-        "^pastebin%.com/([%a%d]+)$",
-    }
-    for _, pattern in ipairs(patterns) do
-        local id = input:match(pattern)
-        if id then return id end
-    end
-    return nil
-end
-
-local function applyUpdate(rawCode)
+local function applyUpdate()
     state.updatingState = true
     drawUI()
 
@@ -1333,23 +1315,30 @@ local function applyUpdate(rawCode)
         return false
     end
 
-    local pasteCode = extractPasteId(rawCode)
-    if not pasteCode then
-        return fail("Ungueltiger Code", "Fehler: Code ungueltig")
-    end
-    addLog("Lade Update: " .. pasteCode)
+    addLog("Lade Update von GitHub...")
     drawUI()
 
     if not http then return fail("HTTP-API inaktiv!", "Fehler: HTTP inaktiv") end
 
-    local url = "https://pastebin.com/raw/" .. pasteCode .. "?cb=" .. string.format("%d", os.epoch("utc"))
-    local response = http.get(url)
-    if not response then return fail("Download fehlgeschlagen", "Download-Fehler") end
+    local url = CFG.GITHUB_URL .. "?cb=" .. string.format("%d", os.epoch("utc"))
+    local response, httpErr, failResp = http.get(url)
+    if not response then
+        local why = tostring(httpErr)
+        if failResp and failResp.getResponseCode then
+            why = "HTTP " .. tostring(failResp.getResponseCode())
+            pcall(failResp.close)
+        end
+        return fail("Download fehlgeschlagen (" .. why:sub(1, 24) .. ")", "Download-Fehler")
+    end
 
     local content = response.readAll()
     response.close()
 
     if not content or #content == 0 then return fail("Datei ist leer", "Fehler: Datei leer") end
+
+    if content:match("^%s*<!DOCTYPE") or content:match("^%s*<[Hh][Tt][Mm][Ll]") then
+        return fail("GitHub lieferte HTML statt Code", "Fehler: HTML erhalten")
+    end
 
     local f = fs.open(CFG.TEMP_FILE, "w")
     if not f then return fail("Temp nicht schreibbar", "Fehler: Dateizugriff") end
@@ -1374,7 +1363,7 @@ local function applyUpdate(rawCode)
 
     if fs.exists("startup") then fs.delete("startup") end
 
-    sendReport(true, "Update erfolgreich (" .. pasteCode .. ")")
+    sendReport(true, "Update erfolgreich (GitHub)")
     addLog("Update installiert! Neustart...")
     drawUI()
     sleep(2)

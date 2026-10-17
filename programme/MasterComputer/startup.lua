@@ -11,6 +11,9 @@ local CONFIG_PROTOCOL_GPS  = "gps_config"
 local STATUS_PROTOCOL      = "notaus"
 local TERMINALS_FILE       = "terminals.db"
 local MASTER_CFG_FILE      = "master_config.cfg"
+local TEMP_FILE            = "startup.update_tmp"
+local BACKUP_FILE          = "startup.backup"
+local GITHUB_URL_MASTER    = "https://raw.githubusercontent.com/LuaLuggas/CCTweaked-VisualStudioCode-PRoject-AI-Agent/main/programme/MasterComputer/startup.lua"
 
 -- ==================================
 -- KOMMENTAR: PERIPHERIE PRUEFEN
@@ -27,12 +30,8 @@ rednet.open(peripheral.getName(modem))
 -- ==================================
 -- KOMMENTAR: GLOBALE VARIABLEN & STATUS
 -- ==================================
-local masterID = os.getComputerID()
-local pasteCodeTerminals = "DeinPasteCode"
-local pasteCodeDoors     = "DeinPasteCode"
-local pasteCodeSigns     = "DeinPasteCode"
-local pasteCodeGps       = "DeinPasteCode"
-local currentRange       = 5
+local masterID     = os.getComputerID()
+local currentRange = 5
 
 -- Zentrale Blink-Einstellungen fuer alle synchronisierten Textanzeigen
 local signSplitBlink = false
@@ -103,14 +102,10 @@ local function saveMasterConfig()
     local f = fs.open(MASTER_CFG_FILE, "w")
     if f then
         f.write(textutils.serialize({
-            pasteCodeTerminals = pasteCodeTerminals,
-            pasteCodeDoors     = pasteCodeDoors,
-            pasteCodeSigns     = pasteCodeSigns,
-            pasteCodeGps       = pasteCodeGps,
-            currentRange       = currentRange,
-            signSplitBlink     = signSplitBlink,
-            signBlinkOn        = signBlinkOn,
-            signBlinkOff       = signBlinkOff
+            currentRange   = currentRange,
+            signSplitBlink = signSplitBlink,
+            signBlinkOn    = signBlinkOn,
+            signBlinkOff   = signBlinkOff
         }))
         f.close()
     end
@@ -123,10 +118,6 @@ local function loadMasterConfig()
             local data = textutils.unserialize(f.readAll())
             f.close()
             if type(data) == "table" then
-                if type(data.pasteCodeTerminals) == "string" then pasteCodeTerminals = data.pasteCodeTerminals end
-                if type(data.pasteCodeDoors) == "string" then pasteCodeDoors = data.pasteCodeDoors end
-                if type(data.pasteCodeSigns) == "string" then pasteCodeSigns = data.pasteCodeSigns end
-                if type(data.pasteCodeGps) == "string" then pasteCodeGps = data.pasteCodeGps end
                 if type(data.currentRange) == "number" then currentRange = data.currentRange end
                 if type(data.signSplitBlink) == "boolean" then signSplitBlink = data.signSplitBlink end
                 if type(data.signBlinkOn) == "number" then signBlinkOn = data.signBlinkOn end
@@ -357,9 +348,10 @@ local function drawVerwUpdatesUI()
     drawMenuButton("update_doors", 6, "UPDATE: TUEREN", colors.gray)
     drawMenuButton("update_signs", 8, "UPDATE: ANZEIGEN", colors.gray)
     drawMenuButton("update_gps", 10, "UPDATE: GPS-HOSTS", colors.gray)
-    drawMenuButton("nav_verw_main", 14, "ZURUECK", colors.lightGray)
+    drawMenuButton("update_master", 12, "UPDATE: MASTER", colors.cyan, colors.black)
+    drawMenuButton("nav_verw_main", 15, "ZURUECK", colors.lightGray)
 
-    drawDebugOverlay(15)
+    drawDebugOverlay(16)
 end
 
 local function drawVerwSettingsUI()
@@ -593,42 +585,6 @@ local function drawTerminalsUI()
     addButton("geraete_ref", 20, h, 5, " REF ")
 end
 
-local function drawUpdaterUI()
-    local targetName  = "Terminals"
-    local currentCode = pasteCodeTerminals
-    local titleCol    = colors.purple
-    if viewMode == "update_doors" then
-        targetName  = "Tueren"
-        currentCode = pasteCodeDoors
-        titleCol    = colors.green
-    elseif viewMode == "update_signs" then
-        targetName  = "Anzeigen"
-        currentCode = pasteCodeSigns
-        titleCol    = colors.lime
-    elseif viewMode == "update_gps" then
-        targetName  = "GPS-Hosts"
-        currentCode = pasteCodeGps
-        titleCol    = colors.cyan
-    end
-
-    drawHeaderTitle(2, "--- UPDATE: " .. string.upper(targetName) .. " ---", titleCol)
-
-    term.setCursorPos(3, 5)
-    term.setTextColor(colors.white)
-    term.write("Aktiver Pastebin Code:")
-
-    term.setCursorPos(3, 6)
-    term.setBackgroundColor(colors.gray)
-    term.setTextColor(colors.white)
-    term.write(string.format(" %-20s", currentCode:sub(1, 20)))
-
-    drawMenuButton("edit_code", 9, "CODE AENDERN", colors.gray)
-    drawMenuButton("send_code", 11, "UPDATE ERZWINGEN", colors.gray)
-    drawMenuButton("nav_verw_updates", 14, "ZURUECK", colors.lightGray)
-
-    drawDebugOverlay(14)
-end
-
 local function drawUI()
     term.setBackgroundColor(colors.black)
     term.clear()
@@ -646,30 +602,82 @@ local function drawUI()
     elseif viewMode == "console" then drawConsoleUI()
     elseif viewMode == "terminals" then drawTerminalsUI()
     elseif viewMode == "range" then drawRangeUI()
-    elseif viewMode == "update_terminals" or viewMode == "update_doors" or viewMode == "update_signs" or viewMode == "update_gps" then drawUpdaterUI()
     end
 end
 
 -- ==================================
--- KOMMENTAR: DIALOG EINGABEN & AKTIONEN
+-- KOMMENTAR: DIALOG EINGABEN, SELBST-UPDATE & AKTIONEN
 -- ==================================
-local function extractPasteId(input)
-    if type(input) ~= "string" then return nil end
-    input = input:gsub("^%s+", ""):gsub("%s+$", "")
-    input = input:gsub("[?#].*$", ""):gsub("/+$", "")
+local function applyMasterSelfUpdate()
+    addDebugMsg("Lade Master-Update von GitHub...")
+    drawUI()
 
-    local patterns = {
-        "^([%a%d]+)$",
-        "^https?://pastebin%.com/raw/([%a%d]+)$",
-        "^https?://pastebin%.com/([%a%d]+)$",
-        "^pastebin%.com/raw/([%a%d]+)$",
-        "^pastebin%.com/([%a%d]+)$",
-    }
-    for _, pattern in ipairs(patterns) do
-        local id = input:match(pattern)
-        if id then return id end
+    local function fail(reason)
+        addLog(0, false, "Master-Update fehlgeschlagen: " .. reason, "Master", "Master", nil)
+        addDebugMsg("Fehler: " .. reason)
+        return false
     end
-    return nil
+
+    if not http then
+        return fail("HTTP-API inaktiv")
+    end
+
+    local url = GITHUB_URL_MASTER .. "?cb=" .. string.format("%d", os.epoch("utc"))
+    local res, httpErr, failResp = http.get(url)
+    if not res then
+        local why = tostring(httpErr)
+        if failResp and failResp.getResponseCode then
+            why = "HTTP " .. tostring(failResp.getResponseCode())
+            pcall(failResp.close)
+        end
+        return fail("Download (" .. why:sub(1, 18) .. ")")
+    end
+
+    local content = res.readAll()
+    res.close()
+
+    if not content or #content == 0 then
+        return fail("Datei leer")
+    end
+
+    if content:match("^%s*<!DOCTYPE") or content:match("^%s*<[Hh][Tt][Mm][Ll]") then
+        return fail("HTML statt Code erhalten")
+    end
+
+    local tf = fs.open(TEMP_FILE, "w")
+    if not tf then
+        return fail("Temp nicht schreibbar")
+    end
+    tf.write(content)
+    tf.close()
+
+    local compiled = loadfile(TEMP_FILE)
+    fs.delete(TEMP_FILE)
+    if not compiled then
+        return fail("Syntaxfehler im Code")
+    end
+
+    if fs.exists(BACKUP_FILE) then fs.delete(BACKUP_FILE) end
+    if fs.exists("startup.lua") then
+        pcall(fs.copy, "startup.lua", BACKUP_FILE)
+    elseif fs.exists("startup") then
+        pcall(fs.copy, "startup", BACKUP_FILE)
+    end
+
+    local f = fs.open("startup.lua", "w")
+    if not f then
+        return fail("Schreibfehler startup.lua")
+    end
+    f.write(content)
+    f.close()
+
+    if fs.exists("startup") then fs.delete("startup") end
+
+    addLog(0, true, "Master-Update installiert (GitHub)", "Master", "Master", nil)
+    addDebugMsg("Update installiert! Neustart...")
+    drawUI()
+    sleep(1.5)
+    os.reboot()
 end
 
 local function editInput(prompt, allowNumbersOnly)
@@ -702,11 +710,28 @@ local function handleAction(id)
         editSignBlinkOff   = signBlinkOff
         viewMode = "sign_blink"
         scrollOffset = 0
-    elseif id == "nav_upd_terms" or id == "update_terminals" then viewMode = "update_terminals"; scrollOffset = 0
-    elseif id == "nav_upd_doors" or id == "update_doors" then viewMode = "update_doors"; scrollOffset = 0
-    elseif id == "nav_upd_signs" or id == "update_signs" then viewMode = "update_signs"; scrollOffset = 0
-    elseif id == "nav_upd_gps" or id == "update_gps" then viewMode = "update_gps"; scrollOffset = 0
     elseif id == "nav_range" or id == "range" then viewMode = "range"; scrollOffset = 0
+
+    -- Direkt-Updates ueber GitHub ausloesen
+    elseif id == "update_terminals" then
+        rednet.broadcast({ action = "update" }, UPDATE_PROTOCOL_TERM)
+        addLog(0, true, "Sende GitHub-Update: Terminals", "Master", "Master", nil)
+        addDebugMsg("Update an Terminals gesendet!")
+    elseif id == "update_doors" then
+        rednet.broadcast({ action = "update" }, UPDATE_PROTOCOL_DOOR)
+        addLog(0, true, "Sende GitHub-Update: Tueren", "Master", "Master", nil)
+        addDebugMsg("Update an Tueren gesendet!")
+    elseif id == "update_signs" then
+        rednet.broadcast({ action = "update" }, UPDATE_PROTOCOL_SIGN)
+        addLog(0, true, "Sende GitHub-Update: Anzeigen", "Master", "Master", nil)
+        addDebugMsg("Update an Anzeigen gesendet!")
+    elseif id == "update_gps" then
+        rednet.broadcast({ action = "update" }, UPDATE_PROTOCOL_GPS)
+        rednet.broadcast({ action = "update_gps" }, UPDATE_PROTOCOL_SIGN)
+        addLog(0, true, "Sende GitHub-Update: GPS-Hosts", "Master", "Master", nil)
+        addDebugMsg("Update an GPS-Hosts gesendet!")
+    elseif id == "update_master" then
+        applyMasterSelfUpdate()
     
     elseif id == "terminals_all" then terminalFilter = nil; viewMode = "terminals"; scrollOffset = 0
     elseif id == "terminals_doors" then terminalFilter = "doors"; viewMode = "terminals"; scrollOffset = 0
@@ -795,51 +820,6 @@ local function handleAction(id)
         }, CONFIG_PROTOCOL_SIGN)
         addLog(0, true, string.format("Sende Blink-Sync (AN:%.2fs AUS:%.2fs)", signBlinkOn, signBlinkOff), "Master", "Master", nil)
         addDebugMsg("Gespeichert und an alle Anzeigen gesendet.")
-    
-    elseif id == "edit_code" then
-        local prompt = "Code (Terminals):"
-        if viewMode == "update_doors" then prompt = "Code (Tueren):"
-        elseif viewMode == "update_signs" then prompt = "Code (Anzeigen):"
-        elseif viewMode == "update_gps" then prompt = "Code (GPS-Hosts):" end
-        local c = editInput(prompt, false)
-        if c then
-            local pid = extractPasteId(c)
-            if pid then
-                if viewMode == "update_terminals" then pasteCodeTerminals = pid
-                elseif viewMode == "update_doors" then pasteCodeDoors = pid
-                elseif viewMode == "update_signs" then pasteCodeSigns = pid
-                elseif viewMode == "update_gps" then pasteCodeGps = pid end
-                saveMasterConfig()
-                addDebugMsg("Code gesetzt: " .. pid)
-            else
-                addDebugMsg("Ungueltiger Pastebin-Code!")
-            end
-        end
-    elseif id == "send_code" then
-        local rawCode = pasteCodeTerminals
-        local prot    = UPDATE_PROTOCOL_TERM
-        if viewMode == "update_doors" then
-            rawCode = pasteCodeDoors
-            prot    = UPDATE_PROTOCOL_DOOR
-        elseif viewMode == "update_signs" then
-            rawCode = pasteCodeSigns
-            prot    = UPDATE_PROTOCOL_SIGN
-        elseif viewMode == "update_gps" then
-            rawCode = pasteCodeGps
-            prot    = UPDATE_PROTOCOL_GPS
-        end
-        local pCode = extractPasteId(rawCode)
-        if pCode and pCode ~= "DeinPasteCode" then
-            addDebugMsg("Sende Update (" .. prot .. ")...")
-            addLog(0, true, "Sende Update " .. prot, "Master", "Master", nil)
-            rednet.broadcast({ action = "update", code = pCode }, prot)
-            -- Abwaertskompatibilitaet fuer GPS-Hosts, die noch auf signs_update lauschen
-            if viewMode == "update_gps" then
-                rednet.broadcast({ action = "update_gps", code = pCode }, UPDATE_PROTOCOL_SIGN)
-            end
-        else
-            addDebugMsg("Fehler: Kein Code eingetragen!")
-        end
     end
 end
 

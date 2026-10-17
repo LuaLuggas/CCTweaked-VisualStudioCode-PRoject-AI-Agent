@@ -1,3 +1,3 @@
-# Rolle: lager (Beispiel, Pfade an dein Projekt anpassen)
-update.lua
+# Rolle: TextAnzeige (Wegweiser- & Alarm-Monitor-System)
 programme/TextAnzeige/startup.lua
+

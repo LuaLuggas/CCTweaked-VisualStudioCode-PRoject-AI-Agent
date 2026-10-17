@@ -12,6 +12,7 @@ local CONFIG_PROTOCOL = "gps_config"
 local LEGACY_PROTOCOL = "signs_update" -- Abwaertskompatibilitaet fuer Pings/Updates
 local TEMP_FILE       = "startup.update_tmp"
 local BACKUP_FILE     = "startup.backup"
+local GITHUB_URL      = "https://raw.githubusercontent.com/LuaLuggas/CCTweaked-VisualStudioCode-PRoject-AI-Agent/main/programme/GPSHost/startup.lua"
 local CHANNEL_GPS     = (gps and gps.CHANNEL_GPS) or 65534
 
 local MAX_LOG  = 3
@@ -324,27 +325,8 @@ local function focusField(i, keepText)
     dirty = true
 end
 
-local function extractPasteId(input)
-    if type(input) ~= "string" then return nil end
-    input = input:gsub("^%s+", ""):gsub("%s+$", "")
-    input = input:gsub("[?#].*$", ""):gsub("/+$", "")
-
-    local patterns = {
-        "^([%a%d]+)$",
-        "^https?://pastebin%.com/raw/([%a%d]+)$",
-        "^https?://pastebin%.com/([%a%d]+)$",
-        "^pastebin%.com/raw/([%a%d]+)$",
-        "^pastebin%.com/([%a%d]+)$",
-    }
-    for _, pattern in ipairs(patterns) do
-        local id = input:match(pattern)
-        if id then return id end
-    end
-    return nil
-end
-
-local function applyUpdate(rawCode)
-    addLog("Lade Update...")
+local function applyUpdate()
+    addLog("Lade Update von GitHub...")
     draw()
 
     local function failUpdate(reason)
@@ -357,25 +339,29 @@ local function applyUpdate(rawCode)
         return false
     end
 
-    local pasteCode = extractPasteId(rawCode)
-    if not pasteCode then
-        return failUpdate("Ungueltiger Code")
-    end
-
     if not http then
         return failUpdate("HTTP inaktiv")
     end
 
-    local url = "https://pastebin.com/raw/" .. pasteCode .. "?cb=" .. string.format("%d", os.epoch("utc"))
-    local res = http.get(url)
+    local url = GITHUB_URL .. "?cb=" .. string.format("%d", os.epoch("utc"))
+    local res, httpErr, failResp = http.get(url)
     if not res then
-        return failUpdate("Download fehlgeschlagen")
+        local why = tostring(httpErr)
+        if failResp and failResp.getResponseCode then
+            why = "HTTP " .. tostring(failResp.getResponseCode())
+            pcall(failResp.close)
+        end
+        return failUpdate("Download fehlgeschlagen (" .. why:sub(1, 20) .. ")")
     end
 
     local content = res.readAll()
     res.close()
     if not content or #content == 0 then
         return failUpdate("Datei leer")
+    end
+
+    if content:match("^%s*<!DOCTYPE") or content:match("^%s*<[Hh][Tt][Mm][Ll]") then
+        return failUpdate("HTML statt Code erhalten")
     end
 
     -- Syntax pruefen bevor startup.lua ueberschrieben wird
@@ -395,6 +381,8 @@ local function applyUpdate(rawCode)
     if fs.exists(BACKUP_FILE) then fs.delete(BACKUP_FILE) end
     if fs.exists("startup.lua") then
         pcall(fs.copy, "startup.lua", BACKUP_FILE)
+    elseif fs.exists("startup") then
+        pcall(fs.copy, "startup", BACKUP_FILE)
     end
 
     local f = fs.open("startup.lua", "w")
@@ -410,7 +398,7 @@ local function applyUpdate(rawCode)
     lastUpdateStat = "erfolgreich"
     saveConfig()
 
-    sendReport(true, "Update erfolgreich installiert (" .. pasteCode .. ")")
+    sendReport(true, "Update erfolgreich installiert (GitHub)")
     addLog("Neustart in 2s...")
     draw()
     sleep(2)

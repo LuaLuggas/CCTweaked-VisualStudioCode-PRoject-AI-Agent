@@ -1,0 +1,3 @@
+# Rolle: EmergencyTerminal (Not-Aus & Lockdown Touch-Panel)
+programme/EmergencyTerminal/startup.lua
+

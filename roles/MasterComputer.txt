@@ -1,0 +1,3 @@
+# Rolle: MasterComputer (Zentrale Bunker-Steuerung, ID 24)
+programme/MasterComputer/startup.lua
+

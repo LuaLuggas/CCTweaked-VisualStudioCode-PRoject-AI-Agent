@@ -1,0 +1,3 @@
+# Rolle: GPSHost (GPS-Satelliten-Host mit Remote-Relocate)
+programme/GPSHost/startup.lua
+

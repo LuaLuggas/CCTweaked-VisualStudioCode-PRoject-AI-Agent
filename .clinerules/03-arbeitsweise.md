@@ -1,22 +1,18 @@
 # Arbeitsweise
 
-## Vor jeder Änderung
-1. Lies die betroffenen Programme und die Dateien in `docs/`, bevor du etwas änderst.
-2. Ist meine Bitte unklar, stelle höchstens zwei kurze Fragen. Sonst entscheide selbst und nenne deine Annahme in einem Satz.
-3. Bei neuen Ideen schlage erst einen kurzen Plan vor: welche Dateien ändern sich, was kann schiefgehen. Warte auf mein OK.
+## Vor jeder Änderung (PFLICHT)
+1. **Lesen:** Lies die betroffenen Programme und die Dateien in `docs/`, bevor du etwas änderst.
+2. **Nachfragen statt Raten:** Wenn irgendetwas an einer Anfrage, einem UI-Detail oder einer Funktion unklar ist, probiere **niemals** Dinge auf gut Glück aus, sondern stelle gezielte Rückfragen an den Nutzer!
+3. **Backup-Abfrage im Projekt (PFLICHT):** Frage vor **jeder** Änderung an bestehenden Skripten, ob das zu verändernde Skript vorher im Projekt als Backup gespeichert bzw. das letzte Backup überschrieben werden soll, damit jederzeit sofort auf den letzten funktionierenden Stand zurückgegriffen werden kann.
+4. **Kurzer Plan:** Bei neuen Ideen oder Umbauten schlage erst einen kurzen Plan vor (welche Dateien ändern sich, was kann schiefgehen) und warte auf das OK.
 
 ## Beim Ändern
-- Mache die kleinste Änderung, die funktioniert. Schreibe keine Dateien komplett neu, benenne nichts um und entferne keine Funktionen, die ich nicht erwähnt habe. Bestehendes, das läuft, bleibt wie es ist.
-- Jede Programmdatei beginnt mit einem Kommentarkopf: Zweck, Rolle (Computer), Abhängigkeiten.
-- Halte Code lesbar: sprechende Namen, kurze Funktionen, Einstellungen als Konstanten am Dateianfang.
-- Bleibe im Projektordner. Lösche keine Dateien ohne Rückfrage. Führe keine Terminalbefehle aus, außer ich bitte darum.
+- Mache die kleinste Änderung, die funktioniert. Schreibe keine Dateien komplett neu, benenne nichts um und entferne keine Funktionen, die nicht erwähnt wurden. Bestehendes, das läuft, bleibt wie es ist.
+- Halte dich strikt an den Bunker-UI-Styleguide und die Lua 5.1 Regeln aus [`GEMINI.md`](../GEMINI.md).
+- Bleibe im Projektordner. Lösche keine Dateien ohne Rückfrage.
 
 ## Nach jeder Änderung
-- Sage mir, was ich im Spiel tun muss (z. B. `update lager` ausführen oder Datei auf Computer X kopieren und neu starten).
-- Nenne 2–3 konkrete Testschritte im Spiel und was ich sehen sollte.
-- Trage die Änderung in `docs/changelog.md` ein (Datum, Datei, ein Satz).
-- Ändern sich Protokolle oder Nachrichten, aktualisiere `docs/netzwerk.md`. Kommen neue Dateien dazu, aktualisiere `roles/<rolle>.txt`.
-
-## Ehrlichkeit
-- Wenn du dir bei einer CC: Tweaked-Funktion nicht sicher bist, sage es und schlage ein kleines Testprogramm vor, statt zu raten.
-- Weise mich auf Risiken hin (z. B. Endlosschleife, Chunk-Loading, viel Netzwerkverkehr), auch wenn ich nicht danach gefragt habe.
+- Erkläre in höchstens 5 Zeilen, was geändert wurde und warum.
+- Sage kurz, was im Spiel zu tun ist (z. B. GitHub Sync in VS Code -> Update am MasterComputer).
+- Nenne 2–3 konkrete Testschritte im Spiel und was zu sehen sein sollte.
+- Trage die Änderung in `docs/changelog.md` ein und halte `docs/netzwerk.md`, `docs/peripherals.md` sowie `roles/` aktuell.
