@@ -78,8 +78,9 @@ Alle Geräte melden ihren Status, Updates und Positionsdaten mit folgender Tabel
 | `signs_config` | `TextAnzeige` $\rightarrow$ Master (`24`) | `{ action = "request_blink_sync" }` | Fragt beim Start oder beim Aktivieren von `[x] Sync` den zentralen Blink-Takt vom Master ab. |
 | `signs_config` | Master $\rightarrow$ Broadcast / Einzel-ID | `{ action = "set_blink", splitBlink = false, blinkOn = 1.20, blinkOff = 1.20, isReply = false }` | Überträgt den zentralen Alarm-Blink-Takt an alle Textanzeigen, bei denen `[x] Sync` aktiviert ist. |
 | `gps_config` & `gps_update` | Master $\rightarrow$ Broadcast | `{ action = "relocate" }` | Weist alle GPS-Hosts an, ihre lokal gespeicherten Koordinaten neu zu laden und das Modem neu zu initialisieren. |
-| `speaker_config` | `Lautsprecher` $\rightarrow$ Master (`24`) | `{ action = "request_speaker_sync" }` | Fragt beim Start des Lautsprechers die zentrale Emergency-/Lockdown-Konfiguration vom Master ab. |
-| `speaker_config` | Master $\rightarrow$ Broadcast / Einzel-ID | `{ action = "set_alarm_config", emergencyUrl = "...", lockdownUrl = "...", alarmVolPct = 100, isReply = false }` | Überträgt die zentralen YouTube-Links/IDs für Emergency & Lockdown sowie die zentrale Alarm-Lautstärke (`0`–`100%`) an alle Lautsprecher. |
+| `speaker_config` | `Lautsprecher` $\rightarrow$ Master (`24`) | `{ action = "request_speaker_sync" }` | Fragt beim Start des Lautsprechers die zentrale Emergency-/Lockdown-Konfiguration und Radio-Playlist vom Master ab. |
+| `speaker_config` | Master $\rightarrow$ Broadcast / Einzel-ID | `{ action = "set_alarm_config", emergencyUrl = "...", lockdownUrl = "...", alarmVol = 100, radioPlaylist = { ... }, isReply = false }` | Uebertraegt die zentralen YouTube-Links/IDs fuer Emergency & Lockdown sowie die zentrale Alarm-Lautstaerke (`0`–`100%`) und Radio-Playlist an Lautsprecher. |
+| `speaker_config` | Master $\rightarrow$ Broadcast / Einzel-ID | `{ action = "set_radio_playlist", playlist = { { id = "...", title = "..." }, ... } }` | Verteilt die zentrale Bunker-Radio Playlist an alle Lautsprecher (im Modus `RADIO` startet sofort der erste Track im Loop). |
 | `speaker_trigger` | Beliebiger PC $\rightarrow$ `Lautsprecher` | `"PLAY"` / `"STOP"` oder `{ action = "play"/"stop", url = "..." }` | Startet oder stoppt die Wiedergabe auf Lautsprechern im Trigger-Modus `FUNK`. |
 
 ---

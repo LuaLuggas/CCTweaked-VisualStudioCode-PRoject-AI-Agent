@@ -31,7 +31,7 @@ local CFG = {
     MSG_UNLOCK = "LOCKDOWN_OFF",
     MSG_STATUS = "STATUS_REQUEST",
 
-    MODES = { "MANUELL", "REDSTONE", "SPIELER", "FUNK" },
+    MODES = { "MANUELL", "REDSTONE", "SPIELER", "FUNK", "RADIO" },
 
     -- Bis zu 24 Chunks (~384 KB) im RAM cachen fuer nahtlosen Loop ohne Nachladen
     MAX_CACHE_CHUNKS = 24,
@@ -51,16 +51,19 @@ local state = {
     localTitle      = "Kein Video",
     volumePct       = 50,     -- 0 bis 100 (100% = 3.0 in CC:Tweaked)
     loopEnabled     = true,
-    triggerMode     = 1,      -- 1=MANUELL, 2=REDSTONE, 3=SPIELER, 4=FUNK
+    triggerMode     = 1,      -- 1=MANUELL, 2=REDSTONE, 3=SPIELER, 4=FUNK, 5=RADIO
     sensorRange     = 5,
     userPlaying     = false,  -- Ob im manuellen Modus Play aktiv war
 
-    -- Vom Master synchronisierte Alarm-Einstellungen
+    -- Vom Master synchronisierte Alarm- & Radio-Einstellungen
     emergencyUrl    = "",
     emergencyId     = "",
     lockdownUrl     = "",
     lockdownId      = "",
     alarmVolumePct  = 100,
+    radioPlaylist   = {},
+    radioTrackIdx   = 1,
+    marqueeOffset   = 0,
 
     -- Update-Historie
     lastUpdateTime  = "-",
@@ -136,6 +139,20 @@ local function pad(s, n)
     return s .. string.rep(" ", n - #s)
 end
 
+local function getMarqueeText(str, maxLen, offset)
+    str = tostring(str or "")
+    if str == "" then return "" end
+    if #str <= maxLen then
+        return str
+    end
+    local spacer = "   ---   "
+    local full = str .. spacer
+    local fullLen = #full
+    local startIdx = ((offset or 0) % fullLen) + 1
+    local doubled = full .. full
+    return doubled:sub(startIdx, startIdx + maxLen - 1)
+end
+
 local function addLog(text)
     local w = term.getSize()
     local maxW = math.max(1, w - 2)
@@ -193,6 +210,8 @@ local function saveConfig()
         lockdownUrl    = state.lockdownUrl,
         lockdownId     = state.lockdownId,
         alarmVolumePct = state.alarmVolumePct,
+        radioPlaylist  = state.radioPlaylist,
+        radioTrackIdx  = state.radioTrackIdx,
         lastUpdateTime = state.lastUpdateTime,
         lastUpdateStat = state.lastUpdateStat
     }))
@@ -220,6 +239,8 @@ local function loadConfig()
                 if type(data.lockdownUrl) == "string" then state.lockdownUrl = data.lockdownUrl end
                 if type(data.lockdownId) == "string" then state.lockdownId = data.lockdownId end
                 if type(data.alarmVolumePct) == "number" then state.alarmVolumePct = math.max(0, math.min(100, data.alarmVolumePct)) end
+                if type(data.radioPlaylist) == "table" then state.radioPlaylist = data.radioPlaylist end
+                if type(data.radioTrackIdx) == "number" then state.radioTrackIdx = math.max(1, data.radioTrackIdx) end
                 if type(data.lastUpdateTime) == "string" then state.lastUpdateTime = data.lastUpdateTime end
                 if type(data.lastUpdateStat) == "string" then state.lastUpdateStat = data.lastUpdateStat end
                 state.fieldUrl = state.localUrl
@@ -361,6 +382,15 @@ local function getDesiredPlayback()
         shouldPlay = state.playerTriggered
     elseif mode == "FUNK" then
         shouldPlay = state.remoteTriggered
+    elseif mode == "RADIO" then
+        if type(state.radioPlaylist) == "table" and #state.radioPlaylist > 0 then
+            local idx = math.max(1, math.min(#state.radioPlaylist, state.radioTrackIdx or 1))
+            local item = state.radioPlaylist[idx]
+            if item and item.id and item.id ~= "" then
+                return item.id, vol, false
+            end
+        end
+        return nil, 0, false
     end
 
     if shouldPlay and state.localVideoId ~= "" then
@@ -456,6 +486,16 @@ local function feedNextAudioChunk()
                 state.cacheReadIdx = 1
                 state.decoder = dfpwm.make_decoder()
                 os.queueEvent("speaker_feed")
+            elseif CFG.MODES[state.triggerMode] == "RADIO" and type(state.radioPlaylist) == "table" and #state.radioPlaylist > 0 then
+                state.radioTrackIdx = (state.radioTrackIdx % #state.radioPlaylist) + 1
+                saveConfig()
+                local nextTrack = state.radioPlaylist[state.radioTrackIdx]
+                if nextTrack and nextTrack.id then
+                    state.activeTargetId = nextTrack.id
+                    requestAudioStream(nextTrack.id)
+                else
+                    stopAllSpeakers()
+                end
             else
                 -- Einmalige Wiedergabe beendet
                 if CFG.MODES[state.triggerMode] == "MANUELL" then state.userPlaying = false; saveConfig() end
@@ -496,6 +536,16 @@ local function feedNextAudioChunk()
             end
             if shouldLoop then
                 requestAudioStream(targetId)
+            elseif CFG.MODES[state.triggerMode] == "RADIO" and type(state.radioPlaylist) == "table" and #state.radioPlaylist > 0 then
+                state.radioTrackIdx = (state.radioTrackIdx % #state.radioPlaylist) + 1
+                saveConfig()
+                local nextTrack = state.radioPlaylist[state.radioTrackIdx]
+                if nextTrack and nextTrack.id then
+                    state.activeTargetId = nextTrack.id
+                    requestAudioStream(nextTrack.id)
+                else
+                    stopAllSpeakers()
+                end
             else
                 if CFG.MODES[state.triggerMode] == "MANUELL" then state.userPlaying = false; saveConfig() end
                 state.rsTriggered     = false
@@ -534,6 +584,12 @@ local function resolveInputToVideoId(rawInput, targetType)
     end
     local directId = extractYoutubeId(trimmed)
     if directId ~= "" then
+        if http and state.searchUrl == nil then
+            local sUrl = CFG.API_URL .. "?v=" .. CFG.API_VERSION .. "&search=" .. textutils.urlEncode(directId)
+            state.searchUrl    = sUrl
+            state.searchTarget = targetType
+            http.request(sUrl)
+        end
         return directId
     end
     if http then
@@ -605,85 +661,125 @@ local function drawUI()
         term.write("BEREIT (" .. tostring(#state.speakers) .. " Speaker)")
     end
 
-    -- 3. Eingabefeld fuer lokales YouTube-Video
-    term.setCursorPos(2, 5)
-    term.setBackgroundColor(colors.black)
-    term.setTextColor(colors.lightGray)
-    local idHint = (state.localVideoId ~= "") and (" [ID: " .. state.localVideoId .. "]") or " [Kein Video]"
-    term.write("YT-Link/ID:" .. idHint)
+    local modeName = CFG.MODES[state.triggerMode] or "MANUELL"
+    local isRadioMode = (modeName == "RADIO")
 
-    local clrX = w - 6
-    term.setCursorPos(clrX, 5)
-    term.setBackgroundColor(colors.gray)
-    term.setTextColor(colors.white)
-    term.write(" CLR ")
-    hitboxes.clearBtn = { x1 = clrX, x2 = clrX + 4, y = 5 }
+    if isRadioMode then
+        -- 3. Radio-Wiedergabe & Track-Titel (Marquee)
+        term.setCursorPos(2, 5)
+        term.setBackgroundColor(colors.black)
+        term.setTextColor(colors.cyan)
+        term.write("BUNKER-RADIO:")
+        if type(state.radioPlaylist) == "table" and #state.radioPlaylist > 0 then
+            local curIdx = math.max(1, math.min(#state.radioPlaylist, state.radioTrackIdx or 1))
+            term.setTextColor(colors.white)
+            term.write(string.format(" Track %d/%d", curIdx, #state.radioPlaylist))
+        else
+            term.setTextColor(colors.yellow)
+            term.write(" [Keine Playlist im Master]")
+        end
 
-    local fieldX = 2
-    local btnW   = 10
-    local btnX   = w - btnW
-    local fieldW = math.max(10, btnX - fieldX - 2)
+        local curTrackTitle = "Kein Track verfuegbar"
+        if type(state.radioPlaylist) == "table" and #state.radioPlaylist > 0 then
+            local curIdx = math.max(1, math.min(#state.radioPlaylist, state.radioTrackIdx or 1))
+            local trk = state.radioPlaylist[curIdx]
+            curTrackTitle = (trk and trk.title and trk.title ~= "") and trk.title or ((trk and trk.id) or "Unbekannt")
+        end
 
-    term.setCursorPos(fieldX, 6)
-    if state.focusUrl then
-        term.setBackgroundColor(colors.lightGray)
+        term.setCursorPos(2, 6)
+        term.setBackgroundColor(colors.gray)
+        term.setTextColor(colors.white)
+        local radioMarquee = getMarqueeText(curTrackTitle, w - 4, state.marqueeOffset)
+        term.write(" " .. pad(radioMarquee, w - 4) .. " ")
+
+        -- 4. Status-Hinweis (Play/Stop & Loop deaktiviert im Radio-Modus)
+        term.setCursorPos(2, 8)
+        term.setBackgroundColor(colors.black)
+        term.setTextColor(colors.lightGray)
+        term.write("Auto-Play aktiv (Playlist im Master verwaltet)")
+    else
+        -- 3. Eingabefeld fuer lokales YouTube-Video & Titel-Marquee
+        term.setCursorPos(2, 5)
+        term.setBackgroundColor(colors.black)
+        term.setTextColor(colors.lightGray)
+        local titleText = (state.localTitle ~= "" and state.localTitle ~= "Kein Video") and state.localTitle or ((state.localVideoId ~= "") and ("ID: " .. state.localVideoId) or "Kein Video")
+        local titleMarquee = getMarqueeText("Titel: " .. titleText, w - 10, state.marqueeOffset)
+        term.write(titleMarquee)
+
+        local clrX = w - 6
+        term.setCursorPos(clrX, 5)
+        term.setBackgroundColor(colors.gray)
+        term.setTextColor(colors.white)
+        term.write(" CLR ")
+        hitboxes.clearBtn = { x1 = clrX, x2 = clrX + 4, y = 5 }
+
+        local fieldX = 2
+        local btnW   = 10
+        local btnX   = w - btnW
+        local fieldW = math.max(10, btnX - fieldX - 2)
+
+        term.setCursorPos(fieldX, 6)
+        if state.focusUrl then
+            term.setBackgroundColor(colors.lightGray)
+            term.setTextColor(colors.black)
+        else
+            term.setBackgroundColor(colors.gray)
+            term.setTextColor(colors.white)
+        end
+        local dispUrl = state.fieldUrl or ""
+        if #dispUrl > fieldW then
+            dispUrl = dispUrl:sub(#dispUrl - fieldW + 1)
+        end
+        term.write(pad(dispUrl, fieldW))
+        hitboxes.urlField = { x1 = fieldX, x2 = fieldX + fieldW - 1, y = 6 }
+
+        local isUrlDirty = hasPendingUrlChange()
+        term.setCursorPos(btnX, 6)
+        term.setBackgroundColor(isUrlDirty and colors.orange or colors.green)
         term.setTextColor(colors.black)
-    else
-        term.setBackgroundColor(colors.gray)
-        term.setTextColor(colors.white)
-    end
-    local dispUrl = state.fieldUrl or ""
-    if #dispUrl > fieldW then
-        dispUrl = dispUrl:sub(#dispUrl - fieldW + 1)
-    end
-    term.write(pad(dispUrl, fieldW))
-    hitboxes.urlField = { x1 = fieldX, x2 = fieldX + fieldW - 1, y = 6 }
+        term.write(pad("  SETZEN  ", btnW))
+        hitboxes.saveUrlBtn = { x1 = btnX, x2 = btnX + btnW - 1, y = 6 }
 
-    local isUrlDirty = hasPendingUrlChange()
-    term.setCursorPos(btnX, 6)
-    term.setBackgroundColor(isUrlDirty and colors.orange or colors.green)
-    term.setTextColor(colors.black)
-    term.write(pad("  SETZEN  ", btnW))
-    hitboxes.saveUrlBtn = { x1 = btnX, x2 = btnX + btnW - 1, y = 6 }
+        -- 4. Play / Stop & Loop-Schalter
+        term.setCursorPos(2, 8)
+        local isPlayingLocal = (state.activeTargetId ~= nil and not state.emergencyActive and not state.lockdownActive)
+        if isPlayingLocal then
+            term.setBackgroundColor(colors.red)
+            term.setTextColor(colors.white)
+            term.write("   STOP   ")
+        else
+            term.setBackgroundColor(colors.gray)
+            term.setTextColor(colors.white)
+            term.write("   PLAY   ")
+        end
+        hitboxes.playBtn = { x1 = 2, x2 = 11, y = 8 }
 
-    -- 4. Play / Stop & Loop-Schalter
-    term.setCursorPos(2, 8)
-    local isPlayingLocal = (state.activeTargetId ~= nil and not state.emergencyActive and not state.lockdownActive)
-    if isPlayingLocal then
-        term.setBackgroundColor(colors.red)
-        term.setTextColor(colors.white)
-        term.write("   STOP   ")
-    else
-        term.setBackgroundColor(colors.gray)
-        term.setTextColor(colors.white)
-        term.write("   PLAY   ")
+        term.setCursorPos(14, 8)
+        if state.loopEnabled then
+            term.setBackgroundColor(colors.green)
+            term.setTextColor(colors.black)
+            term.write(" [x] LOOP AN  ")
+        else
+            term.setBackgroundColor(colors.gray)
+            term.setTextColor(colors.white)
+            term.write(" [ ] LOOP AUS ")
+        end
+        hitboxes.loopBtn = { x1 = 14, x2 = 27, y = 8 }
     end
-    hitboxes.playBtn = { x1 = 2, x2 = 11, y = 8 }
 
-    term.setCursorPos(14, 8)
-    if state.loopEnabled then
-        term.setBackgroundColor(colors.green)
-        term.setTextColor(colors.black)
-        term.write(" [x] LOOP AN  ")
-    else
-        term.setBackgroundColor(colors.gray)
-        term.setTextColor(colors.white)
-        term.write(" [ ] LOOP AUS ")
-    end
-    hitboxes.loopBtn = { x1 = 14, x2 = 27, y = 8 }
-
-    -- 5. Ausloeser-Modus (MANUELL / REDSTONE / SPIELER / FUNK)
+    -- 5. Ausloeser-Modus (MANUELL / REDSTONE / SPIELER / FUNK / RADIO)
     term.setCursorPos(2, 10)
     term.setBackgroundColor(colors.black)
     term.setTextColor(colors.lightGray)
     term.write("Modus: ")
 
-    local modeName = CFG.MODES[state.triggerMode] or "MANUELL"
+    modeName = CFG.MODES[state.triggerMode] or "MANUELL"
     local modeBg   = colors.gray
     local modeFg   = colors.white
     if modeName == "REDSTONE" then modeBg = colors.orange; modeFg = colors.black
     elseif modeName == "SPIELER" then modeBg = colors.cyan; modeFg = colors.black
     elseif modeName == "FUNK" then modeBg = colors.purple; modeFg = colors.white
+    elseif modeName == "RADIO" then modeBg = colors.yellow; modeFg = colors.black
     end
 
     term.setCursorPos(9, 10)
@@ -1188,6 +1284,25 @@ local function main()
                     sendReport(true)
                 elseif type(message) == "table" and message.action == "set_alarm_config" then
                     applyMasterAlarmConfig(message, message.isReply == true)
+                    if type(message.radioPlaylist) == "table" then
+                        state.radioPlaylist = message.radioPlaylist
+                        saveConfig()
+                        if CFG.MODES[state.triggerMode] == "RADIO" then
+                            syncAudioEngine()
+                        end
+                    end
+                elseif type(message) == "table" and message.action == "set_radio_playlist" then
+                    if type(message.playlist) == "table" then
+                        state.radioPlaylist = message.playlist
+                        state.radioTrackIdx = 1
+                        saveConfig()
+                        addLog("Master: Radio-Playlist aktualisiert (" .. tostring(#state.radioPlaylist) .. " Tracks)")
+                        if CFG.MODES[state.triggerMode] == "RADIO" then
+                            stopAllSpeakers()
+                            syncAudioEngine()
+                        end
+                        state.dirty = true
+                    end
                 end
 
             elseif protocol == CFG.TRIGGER_PROTOCOL and not state.updatingState then
@@ -1214,10 +1329,12 @@ local function main()
                 end
             end
 
-        -- 7. Timer fuer Log-Ablauf, Spieler-Detektor und Stream-Retry
+        -- 7. Timer fuer Log-Ablauf, Lauftext-Marquee, Spieler-Detektor und Stream-Retry
         elseif ev == "timer" then
             if p1 == state.tickTimer then
                 state.tickTimer = os.startTimer(0.5)
+                state.marqueeOffset = (state.marqueeOffset or 0) + 1
+                state.dirty = true
                 local t = now()
                 for i = #state.logs, 1, -1 do
                     if state.logs[i].expires <= t then
