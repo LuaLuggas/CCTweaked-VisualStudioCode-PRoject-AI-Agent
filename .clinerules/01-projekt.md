@@ -2,7 +2,7 @@
 
 Dieses Projekt enthält Lua-Programme für die Minecraft-Mod **CC: Tweaked** und **Advanced Peripherals** (Minecraft Java 1.21.1, Modpack All The Mods 10 auf einem gehosteten G-Portal-Server). Die Programme laufen auf Computern, Turtles und Pocket-Computern IM SPIEL. Ich bin Hobbyspieler und kein Programmierer.
 
-> **Hinweis für Antigravity:** Das vollständige, automatisch geladene Haupt-Regelwerk liegt in [`GEMINI.md`](../GEMINI.md).
+> **Hinweis für Antigravity:** Das vollständige, automatisch geladene Haupt-Regelwerk liegt in [`GEMINI.md`](../GEMINI.md). Für neue Rollen und MasterComputer-Erweiterungen steht der Skill [`.agents/skills/bunker-role-blueprint/SKILL.md`](../.agents/skills/bunker-role-blueprint/SKILL.md) bereit.
 
 ## Wie du mit mir sprichst
 - Antworte auf Deutsch, kurz, präzise und ohne unnötigen Fachjargon.
@@ -10,8 +10,9 @@ Dieses Projekt enthält Lua-Programme für die Minecraft-Mod **CC: Tweaked** und
 - Kommentare im Code schreibst du auf Deutsch.
 
 ## Ordnerstruktur
-- `programme/<Rolle>/startup.lua`: Eigenständige All-in-One `startup.lua` je Computer-Rolle (`MasterComputer`, `EmergencyTerminal`, `Tuersensor`, `TextAnzeige`, `GPSHost`).
+- `programme/<Rolle>/startup.lua`: Eigenständige All-in-One `startup.lua` je Computer-Rolle (`MasterComputer`, `EmergencyTerminal`, `Tuersensor`, `TextAnzeige`, `GPSHost`, `Lautsprecher`).
 - `installer.lua` & `roles/<Rolle>.txt`: Rollen-Installer für neue Computer über GitHub.
+- `backups/<Rolle>/startup.lua`: Lokale Projekt-Backups der funktionierenden Skripte vor Änderungen.
 - `docs/peripherals.md`: Welche Blöcke/Mods (CC:Tweaked, Advanced Peripherals, Mekanism, AE2, Mystical Agriculture) an welchen Computern hängen und welche Methoden bestätigt sind.
 - `docs/netzwerk.md`: Alle Rednet-Protokolle, Computer-IDs (`MASTER_ID = 24`) und Nachrichtenformate.
 - `docs/changelog.md`: Kurze Liste aller Änderungen.

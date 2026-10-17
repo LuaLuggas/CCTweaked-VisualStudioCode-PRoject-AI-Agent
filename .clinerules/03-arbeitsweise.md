@@ -1,18 +1,20 @@
-# Arbeitsweise
+# Arbeitsweise (Optimiert für höchste Präzision & Effizienz)
 
 ## Vor jeder Änderung (PFLICHT)
-1. **Lesen:** Lies die betroffenen Programme und die Dateien in `docs/`, bevor du etwas änderst.
-2. **Nachfragen statt Raten:** Wenn irgendetwas an einer Anfrage, einem UI-Detail oder einer Funktion unklar ist, probiere **niemals** Dinge auf gut Glück aus, sondern stelle gezielte Rückfragen an den Nutzer!
-3. **Backup-Abfrage im Projekt (PFLICHT):** Frage vor **jeder** Änderung an bestehenden Skripten, ob das zu verändernde Skript vorher im Projekt als Backup gespeichert bzw. das letzte Backup überschrieben werden soll, damit jederzeit sofort auf den letzten funktionierenden Stand zurückgegriffen werden kann.
-4. **Kurzer Plan:** Bei neuen Ideen oder Umbauten schlage erst einen kurzen Plan vor (welche Dateien ändern sich, was kann schiefgehen) und warte auf das OK.
+1. **Gezielt lesen:** Lies `docs/netzwerk.md`, `docs/peripherals.md` und die relevanten Zeilenbereiche (`StartLine`/`EndLine`) der betroffenen Programme, bevor du etwas änderst.
+2. **Blueprint-Skill nutzen:** Aktiviere bei neuen Rollen oder MasterComputer-Erweiterungen immer den Skill `.agents/skills/bunker-role-blueprint/SKILL.md` und arbeite die 7-Punkte-Checkliste ab.
+3. **Nachfragen statt Raten:** Wenn irgendetwas an einer Anfrage, einem UI-Detail oder einer Funktion unklar ist, probiere **niemals** Dinge auf gut Glück aus, sondern stelle gezielte Rückfragen (`ask_question`) an den Nutzer!
+4. **Backup-Abfrage im Projekt (PFLICHT):** Frage vor **jeder** Änderung an bestehenden Skripten, ob das zu verändernde Skript vorher in `backups/<Rolle>/startup.lua` gespeichert bzw. aktualisiert werden soll.
 
-## Beim Ändern
-- Mache die kleinste Änderung, die funktioniert. Schreibe keine Dateien komplett neu, benenne nichts um und entferne keine Funktionen, die nicht erwähnt wurden. Bestehendes, das läuft, bleibt wie es ist.
-- Halte dich strikt an den Bunker-UI-Styleguide und die Lua 5.1 Regeln aus [`GEMINI.md`](../GEMINI.md).
-- Bleibe im Projektordner. Lösche keine Dateien ohne Rückfrage.
+## Beim Ändern & Selbst-Kontrolle
+- Mache chirurgische Änderungen mit `replace_file_content`. Entferne keine Funktionen oder Sicherheitsprüfungen, die nicht erwähnt wurden.
+- **Pflicht-Selbstcheck nach jedem Edit:**
+  1. Stimmen alle benutzten Tabellen-/Feldnamen exakt mit ihrer Deklaration oben im Skript überein?
+  2. Sind alle `string.format`-Aufrufe mit `or 0` / `or ""` gegen `nil` abgesichert?
+  3. Passen alle Buttons in die 19 Zeilen eines Standard-Terminals?
 
 ## Nach jeder Änderung
 - Erkläre in höchstens 5 Zeilen, was geändert wurde und warum.
-- Sage kurz, was im Spiel zu tun ist (z. B. GitHub Sync in VS Code -> Update am MasterComputer).
+- Sage kurz, was im Spiel zu tun ist (z. B. GitHub Sync in VS Code $\rightarrow$ Update am MasterComputer).
 - Nenne 2–3 konkrete Testschritte im Spiel und was zu sehen sein sollte.
-- Trage die Änderung in `docs/changelog.md` ein und halte `docs/netzwerk.md`, `docs/peripherals.md` sowie `roles/` aktuell.
+- Trage die Änderung in `docs/changelog.md` ein und halte `docs/netzwerk.md`, `docs/peripherals.md`, `installer.lua` sowie `roles/` aktuell.

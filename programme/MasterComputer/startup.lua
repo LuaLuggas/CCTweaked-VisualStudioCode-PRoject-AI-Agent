@@ -434,32 +434,32 @@ local function drawVerwSettingsSpkUI()
     local w = term.getSize()
     drawHeaderTitle(2, "--- LAUTSPRECHER ---", colors.orange)
 
-    local startX = math.max(2, math.floor((w - 28) / 2) + 1)
-    local boxW   = math.min(w - 2, 28)
+    local boxW   = math.min(22, w - 2)
+    local startX = math.floor((w - boxW) / 2) + 1
 
     term.setCursorPos(startX, 4)
     term.setBackgroundColor(colors.black)
     term.setTextColor(colors.red)
-    term.write("Emergency YT-Link / ID:")
-    local emDisp = (#spkCfg.editEmergencyUrl > 0) and spkCfg.editEmergencyUrl or "[ Klicken zum Eingeben ]"
+    term.write("Emergency YT-Link:")
+    local emDisp = (#spkCfg.editEmergencyUrl > 0) and spkCfg.editEmergencyUrl or "[ Link eingeben ]"
     if #emDisp > boxW - 2 then emDisp = emDisp:sub(1, boxW - 5) .. "..." end
     addButton("spk_edit_em", startX, 5, boxW, emDisp, colors.gray, (#spkCfg.editEmergencyUrl > 0) and colors.white or colors.lightGray)
 
     term.setCursorPos(startX, 7)
     term.setBackgroundColor(colors.black)
     term.setTextColor(colors.orange)
-    term.write("Lockdown YT-Link / ID:")
-    local ldDisp = (#spkCfg.editLockdownUrl > 0) and spkCfg.editLockdownUrl or "[ Klicken zum Eingeben ]"
+    term.write("Lockdown YT-Link:")
+    local ldDisp = (#spkCfg.editLockdownUrl > 0) and spkCfg.editLockdownUrl or "[ Link eingeben ]"
     if #ldDisp > boxW - 2 then ldDisp = ldDisp:sub(1, boxW - 5) .. "..." end
     addButton("spk_edit_ld", startX, 8, boxW, ldDisp, colors.gray, (#spkCfg.editLockdownUrl > 0) and colors.white or colors.lightGray)
 
     term.setCursorPos(startX, 10)
     term.setBackgroundColor(colors.black)
     term.setTextColor(colors.white)
-    local vol = spkCfg.editAlarmVol or 100
-    term.write(string.format("Alarm-Vol: %d%%", vol))
-    addButton("spk_vol_dec", startX + 16, 10, 5, "-10%", colors.gray)
-    addButton("spk_vol_inc", startX + 22, 10, 5, "+10%", colors.gray)
+    local vol = tonumber(spkCfg.editAlarmVol) or 100
+    term.write(string.format("Vol: %d%%", vol))
+    addButton("spk_vol_dec", startX + 10, 10, 5, "-10%", colors.gray)
+    addButton("spk_vol_inc", startX + 17, 10, 5, "+10%", colors.gray)
 
     local isDirty = hasPendingSpkChanges()
     drawMenuButton(
@@ -888,14 +888,14 @@ local function handleAction(id)
 
     -- Einstellungen: Lautsprecher Alarm-Konfiguration
     elseif id == "spk_edit_em" then
-        local val = editInput("Emergency YT-Link/ID ('-'=Loeschen):", false)
+        local val = editInput("Emergency-Link (-=Leer):", false)
         if val == "-" then
             spkCfg.editEmergencyUrl = ""
         elseif val then
             spkCfg.editEmergencyUrl = val
         end
     elseif id == "spk_edit_ld" then
-        local val = editInput("Lockdown YT-Link/ID ('-'=Loeschen):", false)
+        local val = editInput("Lockdown-Link (-=Leer):", false)
         if val == "-" then
             spkCfg.editLockdownUrl = ""
         elseif val then
