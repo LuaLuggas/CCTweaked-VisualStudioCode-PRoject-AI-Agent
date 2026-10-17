@@ -1,0 +1,3 @@
+# Rolle: Lautsprecher (YouTube Audio-Player & Bunker-Alarmsystem)
+programme/Lautsprecher/startup.lua
+

@@ -1,8 +1,8 @@
 -- ============================================================================
 -- GITHUB INSTALLER & UPDATER (CC:Tweaked / ATM10 Bunker-System)
 -- Benutzung:
---   update                 -> Oeffnet das interaktive Rollen-Auswahlmenue
---   update <Rolle/Nummer>  -> Installiert die Rolle direkt als /startup.lua
+--   installer                 -> Oeffnet das interaktive Rollen-Auswahlmenue
+--   installer <Rolle/Nummer>  -> Installiert die Rolle direkt als /startup.lua
 -- ============================================================================
 
 local BASE_URL    = "https://raw.githubusercontent.com/LuaLuggas/CCTweaked-VisualStudioCode-PRoject-AI-Agent/main/"
@@ -15,11 +15,12 @@ local ROLES = {
     { key = "2", id = "EmergencyTerminal", title = "2: EmergencyTerminal", path = "programme/EmergencyTerminal/startup.lua" },
     { key = "3", id = "Tuersensor",        title = "3: Tuersensor",        path = "programme/Tuersensor/startup.lua" },
     { key = "4", id = "TextAnzeige",       title = "4: TextAnzeige",       path = "programme/TextAnzeige/startup.lua" },
-    { key = "5", id = "GPSHost",           title = "5: GPSHost",           path = "programme/GPSHost/startup.lua" }
+    { key = "5", id = "GPSHost",           title = "5: GPSHost",           path = "programme/GPSHost/startup.lua" },
+    { key = "6", id = "Lautsprecher",      title = "6: Lautsprecher",      path = "programme/Lautsprecher/startup.lua" }
 }
 
 local buttons = {}
-local statusText = "Rolle per Klick oder Taste 1-5 waehlen"
+local statusText = "Rolle per Klick oder Taste 1-6 waehlen"
 local statusCol  = colors.lightGray
 
 local function fetchFile(repoPath)
@@ -95,10 +96,11 @@ local function installRole(roleObj)
 
     if fs.exists("startup") then fs.delete("startup") end
 
-    -- Optional: update.lua selbst im Hintergrund aktuell halten
-    local selfCode = fetchFile("update.lua")
+    -- Optional: installer.lua selbst im Hintergrund aktuell halten
+    local selfCode = fetchFile("installer.lua")
     if selfCode then
-        local sf = fs.open("update.lua", "w")
+        local selfTarget = (shell and shell.getRunningProgram and shell.getRunningProgram()) or "installer.lua"
+        local sf = fs.open(selfTarget, "w")
         if sf then sf.write(selfCode); sf.close() end
     end
 
@@ -120,6 +122,7 @@ local function findRoleByArg(arg)
     elseif clean == "tuer" or clean == "tuersensor" or clean == "doors" or clean == "door" then return ROLES[3]
     elseif clean == "anzeige" or clean == "textanzeige" or clean == "signs" or clean == "sign" then return ROLES[4]
     elseif clean == "gps" or clean == "gpshost" then return ROLES[5]
+    elseif clean == "lautsprecher" or clean == "speaker" or clean == "speakers" then return ROLES[6]
     end
     return nil
 end
@@ -161,11 +164,11 @@ local function drawMenu()
     local btnX = math.floor((w - btnW) / 2) + 1
 
     for i, r in ipairs(ROLES) do
-        local y = 3 + (i * 2)
+        local y = 2 + (i * 2)
         addButton(r.key, btnX, y, btnW, r.title, colors.gray, colors.white)
     end
 
-    local quitY = math.min(h - 2, 15)
+    local quitY = math.min(h - 2, 16)
     addButton("quit", btnX, quitY, btnW, "ABBRECHEN [Q]", colors.lightGray, colors.black)
 
     term.setBackgroundColor(colors.black)
@@ -175,13 +178,13 @@ local function drawMenu()
     term.write(stText)
 end
 
--- 1. Direkt-Modus per Startargument (z. B. "update TextAnzeige" oder "update 4")
+-- 1. Direkt-Modus per Startargument (z. B. "installer Lautsprecher" oder "installer 6")
 local args = { ... }
 if args[1] then
     local roleObj = findRoleByArg(args[1])
     if not roleObj then
         printError("Unbekannte Rolle: " .. tostring(args[1]))
-        print("Verfuegbar: MasterComputer, EmergencyTerminal, Tuersensor, TextAnzeige, GPSHost (oder 1-5)")
+        print("Verfuegbar: MasterComputer, EmergencyTerminal, Tuersensor, TextAnzeige, GPSHost, Lautsprecher (oder 1-6)")
         return
     end
     print("Installiere Rolle: " .. roleObj.id .. " ...")

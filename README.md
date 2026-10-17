@@ -15,7 +15,7 @@ Zentrales Repository für das Steuerungs-, Sicherheits- und Informationssystem u
   - [`netzwerk.md`](./docs/netzwerk.md) – Alle Rednet-Protokolle, Computer-IDs und Nachrichtenformate.
   - [`peripherals.md`](./docs/peripherals.md) – Verwendete und geplante Peripherals (CC:Tweaked, Advanced Peripherals, Mekanism, AE2, Mystical Agriculture).
   - [`changelog.md`](./docs/changelog.md) – Verlauf aller Änderungen.
-- **[`roles/`](./roles/)** & **[`update.lua`](./update.lua)**: Rollen-Zuordnungen und Direkt-Updater über GitHub.
+- **[`roles/`](./roles/)** & **[`installer.lua`](./installer.lua)**: Rollen-Zuordnungen und interaktiver Direkt-Installer über GitHub.
 
 ## 🔒 Sicherheitshinweis
 Keine Passwörter, Server-Logins oder privaten API-Schlüssel in dieses Repository schreiben, da es für den Ingame-Abruf per `http.get` öffentlich (Public) auf GitHub liegt.

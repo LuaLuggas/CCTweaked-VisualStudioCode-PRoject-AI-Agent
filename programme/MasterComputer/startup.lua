@@ -5,9 +5,11 @@ local UPDATE_PROTOCOL_TERM = "notaus_update"
 local UPDATE_PROTOCOL_DOOR = "doors_update"
 local UPDATE_PROTOCOL_SIGN = "signs_update"
 local UPDATE_PROTOCOL_GPS  = "gps_update"
+local UPDATE_PROTOCOL_SPK  = "speaker_update"
 local CONFIG_PROTOCOL_DOOR = "doors_config"
 local CONFIG_PROTOCOL_SIGN = "signs_config"
 local CONFIG_PROTOCOL_GPS  = "gps_config"
+local CONFIG_PROTOCOL_SPK  = "speaker_config"
 local STATUS_PROTOCOL      = "notaus"
 local TERMINALS_FILE       = "terminals.db"
 local MASTER_CFG_FILE      = "master_config.cfg"
@@ -41,6 +43,16 @@ local editSignSplitBlink = false
 local editSignBlinkOn    = 1.20
 local editSignBlinkOff   = 1.20
 
+-- Zentrale Alarm-Sound-Einstellungen fuer alle Lautsprecher (Upvalue-gebuendelt)
+local spkCfg = {
+    emergencyUrl     = "",
+    lockdownUrl      = "",
+    alarmVol         = 100,
+    editEmergencyUrl = "",
+    editLockdownUrl  = "",
+    editAlarmVol     = 100
+}
+
 local statusMessage = ""
 
 -- Log, UI und Temporaere Nachrichten
@@ -67,6 +79,13 @@ local function hasPendingSignBlinkChanges()
     local effEditOff  = editSignSplitBlink and editSignBlinkOff or editSignBlinkOn
     local effSavedOff = signSplitBlink and signBlinkOff or signBlinkOn
     if math.abs(effEditOff - effSavedOff) > 0.01 then return true end
+    return false
+end
+
+local function hasPendingSpkChanges()
+    if spkCfg.editEmergencyUrl ~= spkCfg.emergencyUrl then return true end
+    if spkCfg.editLockdownUrl ~= spkCfg.lockdownUrl then return true end
+    if spkCfg.editAlarmVol ~= spkCfg.alarmVol then return true end
     return false
 end
 
@@ -102,10 +121,13 @@ local function saveMasterConfig()
     local f = fs.open(MASTER_CFG_FILE, "w")
     if f then
         f.write(textutils.serialize({
-            currentRange   = currentRange,
-            signSplitBlink = signSplitBlink,
-            signBlinkOn    = signBlinkOn,
-            signBlinkOff   = signBlinkOff
+            currentRange    = currentRange,
+            signSplitBlink  = signSplitBlink,
+            signBlinkOn     = signBlinkOn,
+            signBlinkOff    = signBlinkOff,
+            spkEmergencyUrl = spkCfg.emergencyUrl,
+            spkLockdownUrl  = spkCfg.lockdownUrl,
+            spkAlarmVol     = spkCfg.alarmVol
         }))
         f.close()
     end
@@ -122,12 +144,18 @@ local function loadMasterConfig()
                 if type(data.signSplitBlink) == "boolean" then signSplitBlink = data.signSplitBlink end
                 if type(data.signBlinkOn) == "number" then signBlinkOn = data.signBlinkOn end
                 if type(data.signBlinkOff) == "number" then signBlinkOff = data.signBlinkOff end
+                if type(data.spkEmergencyUrl) == "string" then spkCfg.emergencyUrl = data.spkEmergencyUrl end
+                if type(data.spkLockdownUrl) == "string" then spkCfg.lockdownUrl = data.spkLockdownUrl end
+                if type(data.spkAlarmVol) == "number" then spkCfg.alarmVol = math.max(0, math.min(100, data.spkAlarmVol)) end
             end
         end
     end
-    editSignSplitBlink = signSplitBlink
-    editSignBlinkOn    = signBlinkOn
-    editSignBlinkOff   = signBlinkOff
+    editSignSplitBlink      = signSplitBlink
+    editSignBlinkOn         = signBlinkOn
+    editSignBlinkOff        = signBlinkOff
+    spkCfg.editEmergencyUrl = spkCfg.emergencyUrl
+    spkCfg.editLockdownUrl  = spkCfg.lockdownUrl
+    spkCfg.editAlarmVol     = spkCfg.alarmVol
 end
 
 local function saveTerminals()
@@ -174,6 +202,8 @@ local function registerTerminal(id, label, pos, protocol, preview, explicitType)
             devType = "gps"
         elseif protocol == UPDATE_PROTOCOL_SIGN or protocol == CONFIG_PROTOCOL_SIGN then
             devType = "sign"
+        elseif protocol == UPDATE_PROTOCOL_SPK or protocol == CONFIG_PROTOCOL_SPK then
+            devType = "speaker"
         elseif protocol == UPDATE_PROTOCOL_TERM or protocol == STATUS_PROTOCOL then
             devType = "terminal"
         elseif prevEntry and prevEntry.devType then
@@ -236,6 +266,8 @@ local function getTerminalsList(filter)
         elseif filter == "signs" and termData.devType == "sign" then
             table.insert(list, termData)
         elseif filter == "gps" and termData.devType == "gps" then
+            table.insert(list, termData)
+        elseif filter == "speakers" and termData.devType == "speaker" then
             table.insert(list, termData)
         end
     end
@@ -336,9 +368,10 @@ local function drawVerwGeraeteUI()
     drawMenuButton("terminals_terms", 8, "TERMINALS", colors.gray)
     drawMenuButton("terminals_signs", 10, "TEXTANZEIGEN", colors.gray)
     drawMenuButton("terminals_gps", 12, "GPS-HOSTS", colors.gray)
-    drawMenuButton("nav_verw_main", 15, "ZURUECK", colors.lightGray)
+    drawMenuButton("terminals_speakers", 14, "LAUTSPRECHER", colors.gray)
+    drawMenuButton("nav_verw_main", 16, "ZURUECK", colors.lightGray)
 
-    drawDebugOverlay(16)
+    drawDebugOverlay(17)
 end
 
 local function drawVerwUpdatesUI()
@@ -348,10 +381,11 @@ local function drawVerwUpdatesUI()
     drawMenuButton("update_doors", 6, "UPDATE: TUEREN", colors.gray)
     drawMenuButton("update_signs", 8, "UPDATE: ANZEIGEN", colors.gray)
     drawMenuButton("update_gps", 10, "UPDATE: GPS-HOSTS", colors.gray)
-    drawMenuButton("update_master", 12, "UPDATE: MASTER", colors.cyan, colors.black)
-    drawMenuButton("nav_verw_main", 15, "ZURUECK", colors.lightGray)
+    drawMenuButton("update_speakers", 12, "UPDATE: SPEAKER", colors.gray)
+    drawMenuButton("update_master", 14, "UPDATE: MASTER", colors.cyan, colors.black)
+    drawMenuButton("nav_verw_main", 16, "ZURUECK", colors.lightGray)
 
-    drawDebugOverlay(16)
+    drawDebugOverlay(17)
 end
 
 local function drawVerwSettingsUI()
@@ -360,6 +394,7 @@ local function drawVerwSettingsUI()
     drawMenuButton("nav_verw_settings_doors", 5, "TUEREN", colors.gray)
     drawMenuButton("nav_verw_settings_signs", 7, "TEXTANZEIGEN", colors.gray)
     drawMenuButton("nav_verw_settings_gps", 9, "GPS-HOST", colors.gray)
+    drawMenuButton("nav_verw_settings_spk", 11, "LAUTSPRECHER", colors.gray)
     drawMenuButton("nav_verw_main", 14, "ZURUECK", colors.lightGray)
 
     drawDebugOverlay(15)
@@ -384,7 +419,7 @@ local function drawVerwSettingsSignsUI()
 end
 
 -- ==================================
--- KOMMENTAR: UI RENDERER - EINSTELLUNGEN -> GPS-HOST
+-- KOMMENTAR: UI RENDERER - EINSTELLUNGEN -> GPS-HOST & LAUTSPRECHER
 -- ==================================
 local function drawVerwSettingsGpsUI()
     drawHeaderTitle(2, "--- GPS-HOST ---", colors.cyan)
@@ -393,6 +428,49 @@ local function drawVerwSettingsGpsUI()
     drawMenuButton("nav_verw_settings", 14, "ZURUECK", colors.lightGray)
 
     drawDebugOverlay(14)
+end
+
+local function drawVerwSettingsSpkUI()
+    local w = term.getSize()
+    drawHeaderTitle(2, "--- LAUTSPRECHER ---", colors.orange)
+
+    local startX = math.max(2, math.floor((w - 28) / 2) + 1)
+    local boxW   = math.min(w - 2, 28)
+
+    term.setCursorPos(startX, 4)
+    term.setBackgroundColor(colors.black)
+    term.setTextColor(colors.red)
+    term.write("Emergency YT-Link / ID:")
+    local emDisp = (#spkCfg.editEmergencyUrl > 0) and spkCfg.editEmergencyUrl or "[ Klicken zum Eingeben ]"
+    if #emDisp > boxW - 2 then emDisp = emDisp:sub(1, boxW - 5) .. "..." end
+    addButton("spk_edit_em", startX, 5, boxW, emDisp, colors.gray, (#spkCfg.editEmergencyUrl > 0) and colors.white or colors.lightGray)
+
+    term.setCursorPos(startX, 7)
+    term.setBackgroundColor(colors.black)
+    term.setTextColor(colors.orange)
+    term.write("Lockdown YT-Link / ID:")
+    local ldDisp = (#spkCfg.editLockdownUrl > 0) and spkCfg.editLockdownUrl or "[ Klicken zum Eingeben ]"
+    if #ldDisp > boxW - 2 then ldDisp = ldDisp:sub(1, boxW - 5) .. "..." end
+    addButton("spk_edit_ld", startX, 8, boxW, ldDisp, colors.gray, (#spkCfg.editLockdownUrl > 0) and colors.white or colors.lightGray)
+
+    term.setCursorPos(startX, 10)
+    term.setBackgroundColor(colors.black)
+    term.setTextColor(colors.white)
+    term.write(string.format("Alarm-Vol: %d%%", spkCfg.editAlarmVolPct))
+    addButton("spk_vol_dec", startX + 16, 10, 5, "-10%", colors.gray)
+    addButton("spk_vol_inc", startX + 22, 10, 5, "+10%", colors.gray)
+
+    local isDirty = hasPendingSpkChanges()
+    drawMenuButton(
+        "spk_send_alarm",
+        13,
+        "SPEICHERN & SENDEN",
+        isDirty and colors.orange or colors.gray,
+        isDirty and colors.black or colors.white
+    )
+    drawMenuButton("nav_verw_settings", 15, "ZURUECK", colors.lightGray)
+
+    drawDebugOverlay(16)
 end
 
 local function drawSignBlinkUI()
@@ -530,6 +608,9 @@ local function drawTerminalsUI()
     elseif terminalFilter == "gps" then
         title = "--- GPS-HOSTS ---"
         titleCol = colors.cyan
+    elseif terminalFilter == "speakers" then
+        title = "--- LAUTSPRECHER ---"
+        titleCol = colors.orange
     end
     drawHeaderTitle(1, title, titleCol)
 
@@ -548,7 +629,7 @@ local function drawTerminalsUI()
             local displayLabel = tData.label or ("ID " .. tostring(tData.id))
             if tData.devType == "sign" and tData.preview and #tostring(tData.preview) > 0 then
                 displayLabel = "\"" .. tostring(tData.preview) .. "\""
-            elseif tData.devType == "gps" and tData.preview and #tostring(tData.preview) > 0 then
+            elseif (tData.devType == "gps" or tData.devType == "speaker") and tData.preview and #tostring(tData.preview) > 0 then
                 displayLabel = "[" .. tostring(tData.preview) .. "]"
             end
             local line1 = string.format("ID:%d | %s", tData.id, displayLabel)
@@ -598,6 +679,7 @@ local function drawUI()
     elseif viewMode == "verw_settings_doors" then drawVerwSettingsDoorsUI()
     elseif viewMode == "verw_settings_signs" then drawVerwSettingsSignsUI()
     elseif viewMode == "verw_settings_gps" then drawVerwSettingsGpsUI()
+    elseif viewMode == "verw_settings_spk" then drawVerwSettingsSpkUI()
     elseif viewMode == "sign_blink" then drawSignBlinkUI()
     elseif viewMode == "console" then drawConsoleUI()
     elseif viewMode == "terminals" then drawTerminalsUI()
@@ -704,6 +786,12 @@ local function handleAction(id)
     elseif id == "nav_verw_settings_doors" or id == "verw_settings_doors" then viewMode = "verw_settings_doors"; scrollOffset = 0
     elseif id == "nav_verw_settings_signs" then viewMode = "verw_settings_signs"; scrollOffset = 0
     elseif id == "nav_verw_settings_gps" then viewMode = "verw_settings_gps"; scrollOffset = 0
+    elseif id == "nav_verw_settings_spk" then
+        spkCfg.editEmergencyUrl = spkCfg.emergencyUrl
+        spkCfg.editLockdownUrl  = spkCfg.lockdownUrl
+        spkCfg.editAlarmVolPct  = spkCfg.alarmVolPct
+        viewMode = "verw_settings_spk"
+        scrollOffset = 0
     elseif id == "nav_sign_blink" then
         editSignSplitBlink = signSplitBlink
         editSignBlinkOn    = signBlinkOn
@@ -730,6 +818,10 @@ local function handleAction(id)
         rednet.broadcast({ action = "update_gps" }, UPDATE_PROTOCOL_SIGN)
         addLog(0, true, "Sende GitHub-Update: GPS-Hosts", "Master", "Master", nil)
         addDebugMsg("Update an GPS-Hosts gesendet!")
+    elseif id == "update_speakers" then
+        rednet.broadcast({ action = "update" }, UPDATE_PROTOCOL_SPK)
+        addLog(0, true, "Sende GitHub-Update: Lautsprecher", "Master", "Master", nil)
+        addDebugMsg("Update an Lautsprecher gesendet!")
     elseif id == "update_master" then
         applyMasterSelfUpdate()
     
@@ -738,6 +830,7 @@ local function handleAction(id)
     elseif id == "terminals_terms" then terminalFilter = "terminals"; viewMode = "terminals"; scrollOffset = 0
     elseif id == "terminals_signs" then terminalFilter = "signs"; viewMode = "terminals"; scrollOffset = 0
     elseif id == "terminals_gps" then terminalFilter = "gps"; viewMode = "terminals"; scrollOffset = 0
+    elseif id == "terminals_speakers" then terminalFilter = "speakers"; viewMode = "terminals"; scrollOffset = 0
     
     elseif id == "geraete_del" then
         local idNum = editInput("Geraete ID zum Loeschen:", true)
@@ -755,7 +848,7 @@ local function handleAction(id)
         scrollOffset = 0
         addDebugMsg("Geraeteliste geleert.")
     elseif id == "geraete_ref" then
-        -- Sendet Status-Request an alle Geraete-Typen inklusive GPS-Hosts!
+        -- Sendet Status-Request an alle Geraete-Typen inklusive GPS-Hosts & Lautsprecher!
         rednet.broadcast("STATUS_REQUEST", STATUS_PROTOCOL)
         rednet.broadcast("STATUS_REQUEST", UPDATE_PROTOCOL_TERM)
         rednet.broadcast("STATUS_REQUEST", CONFIG_PROTOCOL_DOOR)
@@ -763,6 +856,8 @@ local function handleAction(id)
         rednet.broadcast("STATUS_REQUEST", UPDATE_PROTOCOL_SIGN)
         rednet.broadcast("STATUS_REQUEST", CONFIG_PROTOCOL_GPS)
         rednet.broadcast("STATUS_REQUEST", UPDATE_PROTOCOL_GPS)
+        rednet.broadcast("STATUS_REQUEST", CONFIG_PROTOCOL_SPK)
+        rednet.broadcast("STATUS_REQUEST", UPDATE_PROTOCOL_SPK)
         addDebugMsg("Ping an alle Geraete gesendet...")
     
     elseif id == "console_clr" then
@@ -789,6 +884,40 @@ local function handleAction(id)
         rednet.broadcast({ action = "relocate" }, UPDATE_PROTOCOL_GPS)
         addLog(0, true, "Sende Relocate an alle GPS-Hosts", "Master", "Master", nil)
         addDebugMsg("Relocate-Befehl an alle GPS-Hosts gesendet.")
+
+    -- Einstellungen: Lautsprecher Alarm-Konfiguration
+    elseif id == "spk_edit_em" then
+        local val = editInput("Emergency YT-Link/ID ('-'=Loeschen):", false)
+        if val == "-" then
+            spkCfg.editEmergencyUrl = ""
+        elseif val then
+            spkCfg.editEmergencyUrl = val
+        end
+    elseif id == "spk_edit_ld" then
+        local val = editInput("Lockdown YT-Link/ID ('-'=Loeschen):", false)
+        if val == "-" then
+            spkCfg.editLockdownUrl = ""
+        elseif val then
+            spkCfg.editLockdownUrl = val
+        end
+    elseif id == "spk_vol_dec" then
+        spkCfg.editAlarmVolPct = math.max(0, spkCfg.editAlarmVolPct - 10)
+    elseif id == "spk_vol_inc" then
+        spkCfg.editAlarmVolPct = math.min(100, spkCfg.editAlarmVolPct + 10)
+    elseif id == "spk_send_alarm" then
+        spkCfg.emergencyUrl = spkCfg.editEmergencyUrl
+        spkCfg.lockdownUrl  = spkCfg.editLockdownUrl
+        spkCfg.alarmVolPct  = spkCfg.editAlarmVolPct
+        saveMasterConfig()
+        rednet.broadcast({
+            action       = "set_alarm_config",
+            emergencyUrl = spkCfg.emergencyUrl,
+            lockdownUrl  = spkCfg.lockdownUrl,
+            alarmVolPct  = spkCfg.alarmVolPct,
+            isReply      = false
+        }, CONFIG_PROTOCOL_SPK)
+        addLog(0, true, string.format("Sende Speaker-Alarm-Sync (Vol:%d%%)", spkCfg.alarmVolPct), "Master", "Master", nil)
+        addDebugMsg("Gespeichert und an alle Speaker gesendet.")
 
     elseif id == "toggle_sign_split" then
         editSignSplitBlink = not editSignSplitBlink
@@ -871,7 +1000,7 @@ local function main()
         elseif event == "rednet_message" then
             local id, message, protocol = p1, p2, p3
 
-            if (protocol == UPDATE_PROTOCOL_TERM or protocol == UPDATE_PROTOCOL_DOOR or protocol == UPDATE_PROTOCOL_SIGN or protocol == UPDATE_PROTOCOL_GPS or protocol == CONFIG_PROTOCOL_DOOR or protocol == CONFIG_PROTOCOL_SIGN or protocol == CONFIG_PROTOCOL_GPS) and type(message) == "table" then
+            if (protocol == UPDATE_PROTOCOL_TERM or protocol == UPDATE_PROTOCOL_DOOR or protocol == UPDATE_PROTOCOL_SIGN or protocol == UPDATE_PROTOCOL_GPS or protocol == UPDATE_PROTOCOL_SPK or protocol == CONFIG_PROTOCOL_DOOR or protocol == CONFIG_PROTOCOL_SIGN or protocol == CONFIG_PROTOCOL_GPS or protocol == CONFIG_PROTOCOL_SPK) and type(message) == "table" then
                 if message.action == "log_report" then
                     addLog(id, message.success, message.details, message.pos, message.label, protocol, message.preview, message.devType)
                     if viewMode == "console" or viewMode == "terminals" then drawUI() end
@@ -883,6 +1012,14 @@ local function main()
                         blinkOff   = signBlinkOff,
                         isReply    = true
                     }, CONFIG_PROTOCOL_SIGN)
+                elseif protocol == CONFIG_PROTOCOL_SPK and message.action == "request_speaker_sync" then
+                    rednet.send(id, {
+                        action       = "set_alarm_config",
+                        emergencyUrl = spkCfg.emergencyUrl,
+                        lockdownUrl  = spkCfg.lockdownUrl,
+                        alarmVolPct  = spkCfg.alarmVolPct,
+                        isReply      = true
+                    }, CONFIG_PROTOCOL_SPK)
                 end
             elseif protocol == STATUS_PROTOCOL and (message == "EMERGENCY_ON" or message == "EMERGENCY_OFF") then
                 local existingPos = registeredTerminals[id] and registeredTerminals[id].pos or "Terminal"

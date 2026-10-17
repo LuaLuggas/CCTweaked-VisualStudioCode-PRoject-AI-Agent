@@ -11,7 +11,7 @@ Dieses Projekt enthält Lua-Programme für die Minecraft-Mod **CC: Tweaked** und
 
 ## Ordnerstruktur
 - `programme/<Rolle>/startup.lua`: Eigenständige All-in-One `startup.lua` je Computer-Rolle (`MasterComputer`, `EmergencyTerminal`, `Tuersensor`, `TextAnzeige`, `GPSHost`).
-- `roles/<Rolle>.txt`: Rollen-Zuordnung für das Update-Skript (`update.lua`) über GitHub.
+- `installer.lua` & `roles/<Rolle>.txt`: Rollen-Installer für neue Computer über GitHub.
 - `docs/peripherals.md`: Welche Blöcke/Mods (CC:Tweaked, Advanced Peripherals, Mekanism, AE2, Mystical Agriculture) an welchen Computern hängen und welche Methoden bestätigt sind.
 - `docs/netzwerk.md`: Alle Rednet-Protokolle, Computer-IDs (`MASTER_ID = 24`) und Nachrichtenformate.
 - `docs/changelog.md`: Kurze Liste aller Änderungen.

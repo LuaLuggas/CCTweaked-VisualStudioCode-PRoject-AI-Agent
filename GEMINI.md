@@ -16,7 +16,9 @@
     - `programme/Tuersensor/startup.lua` (Player-Detector-Steuerung für Türen/Schleusen)
     - `programme/TextAnzeige/startup.lua` (Mehrzeilige Wegweiser- & Alarm-Monitore mit Live-Editor)
     - `programme/GPSHost/startup.lua` (GPS-Satelliten-Terminal mit Remote-Relocate)
-- **`roles/<Rolle>.txt`**: Rollen-Definitionen für den Erst-Installer (`update.lua`).
+    - `programme/Lautsprecher/startup.lua` (YouTube Audio-Player mit 4 Trigger-Modi & Emergency/Lockdown-Sirene)
+- **`installer.lua`** & **`roles/<Rolle>.txt`**: Interaktiver Erst-Installer im Bunker-Design und Rollen-Definitionen.
+- **`backups/<Rolle>/startup.lua`**: Lokale Projekt-Backups der funktionierenden Skripte vor Änderungen.
 - **`docs/netzwerk.md`**: Verbindliche Referenz für alle Rednet-Protokolle, Computer-IDs und Nachrichten-Tabellen.
 - **`docs/peripherals.md`**: Verbindliche Referenz für angeschlossene Peripherals, Seiten und bestätigte Methoden in ATM10.
 - **`docs/changelog.md`**: Kurzes Protokoll aller durchgeführten Änderungen.
