@@ -43,25 +43,31 @@ local editSignSplitBlink = false
 local editSignBlinkOn    = 1.20
 local editSignBlinkOff   = 1.20
 
--- Zentrale Alarm-Sound- & Radio-Einstellungen fuer alle Lautsprecher (Upvalue-gebuendelt)
+-- Zentrale Alarm-Sound-, Radio- & Broadcast-Einstellungen fuer alle Lautsprecher (Upvalue-gebuendelt)
 local spkCfg = {
-    emergencyUrl      = "",
-    emergencyTitle    = "",
-    lockdownUrl       = "",
-    lockdownTitle     = "",
-    alarmVol          = 100,
-    editEmergencyUrl  = "",
-    editEmergencyTitle = "",
-    editLockdownUrl   = "",
-    editLockdownTitle = "",
-    editAlarmVol      = 100,
-    radioPlaylist     = {},
-    editRadioPlaylist = {},
-    selectedTrackIdx  = nil,
-    radioScrollOffset = 0,
-    marqueeOffset     = 0,
-    protoRadioUpdate  = "radio_update",
-    protoRadioConfig  = "radio_config"
+    emergencyUrl          = "",
+    emergencyTitle        = "",
+    lockdownUrl           = "",
+    lockdownTitle         = "",
+    alarmVol              = 100,
+    editEmergencyUrl      = "",
+    editEmergencyTitle    = "",
+    editLockdownUrl       = "",
+    editLockdownTitle     = "",
+    editAlarmVol          = 100,
+    radioPlaylist         = {},
+    editRadioPlaylist     = {},
+    selectedTrackIdx      = nil,
+    radioScrollOffset     = 0,
+    broadcastPlaylist     = {},
+    editBroadcastPlaylist = {},
+    selectedBcTrackIdx    = nil,
+    bcScrollOffset        = 0,
+    marqueeOffset         = 0,
+    protoRadioUpdate      = "radio_update",
+    protoRadioConfig      = "radio_config",
+    protoBroadcastUpdate  = "broadcast_update",
+    protoBroadcastConfig  = "broadcast_config"
 }
 
 local statusMessage = ""
@@ -219,6 +225,18 @@ local function hasPendingRadioChanges()
     return false
 end
 
+spkCfg.hasPendingBroadcastChanges = function()
+    local aList = spkCfg.broadcastPlaylist or {}
+    local bList = spkCfg.editBroadcastPlaylist or {}
+    if #aList ~= #bList then return true end
+    for i = 1, #aList do
+        local a = aList[i]
+        local b = bList[i]
+        if not b or a.id ~= b.id or a.title ~= b.title then return true end
+    end
+    return false
+end
+
 -- ==================================
 -- KOMMENTAR: DEBUG NACHRICHTEN SYSTEM
 -- ==================================
@@ -251,16 +269,17 @@ local function saveMasterConfig()
     local f = fs.open(MASTER_CFG_FILE, "w")
     if f then
         f.write(textutils.serialize({
-            currentRange      = currentRange,
-            signSplitBlink    = signSplitBlink,
-            signBlinkOn       = signBlinkOn,
-            signBlinkOff      = signBlinkOff,
-            spkEmergencyUrl   = spkCfg.emergencyUrl,
-            spkEmergencyTitle = spkCfg.emergencyTitle,
-            spkLockdownUrl    = spkCfg.lockdownUrl,
-            spkLockdownTitle  = spkCfg.lockdownTitle,
-            spkAlarmVol       = spkCfg.alarmVol,
-            spkRadioPlaylist  = spkCfg.radioPlaylist
+            currentRange         = currentRange,
+            signSplitBlink       = signSplitBlink,
+            signBlinkOn          = signBlinkOn,
+            signBlinkOff         = signBlinkOff,
+            spkEmergencyUrl      = spkCfg.emergencyUrl,
+            spkEmergencyTitle    = spkCfg.emergencyTitle,
+            spkLockdownUrl       = spkCfg.lockdownUrl,
+            spkLockdownTitle     = spkCfg.lockdownTitle,
+            spkAlarmVol          = spkCfg.alarmVol,
+            spkRadioPlaylist     = spkCfg.radioPlaylist,
+            spkBroadcastPlaylist = spkCfg.broadcastPlaylist
         }))
         f.close()
     end
@@ -297,6 +316,20 @@ local function loadMasterConfig()
                         end
                     end
                 end
+                if type(data.spkBroadcastPlaylist) == "table" then
+                    spkCfg.broadcastPlaylist = {}
+                    for _, t in ipairs(data.spkBroadcastPlaylist) do
+                        if type(t) == "table" and t.id then
+                            local vid = tostring(t.id)
+                            local ttl = spkCfg.cleanTitle(t.title or "")
+                            if spkCfg.isBadTitle(ttl, vid) then
+                                local _, realTitle = spkCfg.fetchVideoInfo(vid)
+                                if realTitle ~= "" then ttl = realTitle; repaired = true end
+                            end
+                            table.insert(spkCfg.broadcastPlaylist, { id = vid, title = (ttl ~= "" and ttl or "YouTube-Video") })
+                        end
+                    end
+                end
             end
         end
     end
@@ -322,6 +355,10 @@ local function loadMasterConfig()
     spkCfg.editRadioPlaylist  = {}
     for _, t in ipairs(spkCfg.radioPlaylist or {}) do
         table.insert(spkCfg.editRadioPlaylist, { id = t.id, title = t.title })
+    end
+    spkCfg.editBroadcastPlaylist = {}
+    for _, t in ipairs(spkCfg.broadcastPlaylist or {}) do
+        table.insert(spkCfg.editBroadcastPlaylist, { id = t.id, title = t.title })
     end
 end
 
@@ -373,6 +410,8 @@ local function registerTerminal(id, label, pos, protocol, preview, explicitType)
             devType = "speaker"
         elseif protocol == spkCfg.protoRadioUpdate or protocol == spkCfg.protoRadioConfig then
             devType = "radio"
+        elseif protocol == spkCfg.protoBroadcastUpdate or protocol == spkCfg.protoBroadcastConfig then
+            devType = "broadcast"
         elseif protocol == UPDATE_PROTOCOL_TERM or protocol == STATUS_PROTOCOL then
             devType = "terminal"
         elseif prevEntry and prevEntry.devType then
@@ -439,6 +478,8 @@ local function getTerminalsList(filter)
         elseif filter == "speakers" and termData.devType == "speaker" then
             table.insert(list, termData)
         elseif filter == "radio" and termData.devType == "radio" then
+            table.insert(list, termData)
+        elseif filter == "broadcast" and termData.devType == "broadcast" then
             table.insert(list, termData)
         end
     end
@@ -532,6 +573,11 @@ local function drawVerwaltungMainUI()
 end
 
 local function drawVerwGeraeteUI()
+    local w = term.getSize()
+    local btnW = math.min(24, w - 2)
+    local startX = math.floor((w - btnW) / 2) + 1
+    local halfW = 11
+
     drawHeaderTitle(2, "--- GERAETE LISTE ---", colors.yellow)
 
     drawMenuButton("terminals_all", 4, "ALLE GERAETE", colors.gray)
@@ -540,13 +586,19 @@ local function drawVerwGeraeteUI()
     drawMenuButton("terminals_signs", 10, "TEXTANZEIGEN", colors.gray)
     drawMenuButton("terminals_gps", 12, "GPS-HOSTS", colors.gray)
     drawMenuButton("terminals_speakers", 14, "LAUTSPRECHER", colors.gray)
-    drawMenuButton("terminals_radio", 16, "RADIO-HOSTS", colors.gray)
+    addButton("terminals_radio", startX, 16, halfW, "RADIO-HOST", colors.gray)
+    addButton("terminals_broadcast", startX + 13, 16, halfW, "BROAD-HOST", colors.gray)
     drawMenuButton("nav_verw_main", 18, "ZURUECK", colors.lightGray)
 
     drawDebugOverlay(18)
 end
 
 local function drawVerwUpdatesUI()
+    local w = term.getSize()
+    local btnW = math.min(24, w - 2)
+    local startX = math.floor((w - btnW) / 2) + 1
+    local halfW = 11
+
     drawHeaderTitle(2, "--- UPDATES ---", colors.lightBlue)
 
     drawMenuButton("update_terminals", 4, "UPDATE: TERMINALS", colors.gray)
@@ -554,7 +606,8 @@ local function drawVerwUpdatesUI()
     drawMenuButton("update_signs", 8, "UPDATE: ANZEIGEN", colors.gray)
     drawMenuButton("update_gps", 10, "UPDATE: GPS-HOSTS", colors.gray)
     drawMenuButton("update_speakers", 12, "UPDATE: SPEAKER", colors.gray)
-    drawMenuButton("update_radio", 14, "UPDATE: RADIO-HOST", colors.gray)
+    addButton("update_radio", startX, 14, halfW, "UPD: RADIO", colors.gray)
+    addButton("update_broadcast", startX + 13, 14, halfW, "UPD: BROAD", colors.gray)
     drawMenuButton("update_master", 16, "UPDATE: MASTER", colors.cyan, colors.black)
     drawMenuButton("nav_verw_main", 18, "ZURUECK", colors.lightGray)
 
@@ -609,6 +662,7 @@ local function drawVerwSettingsSpkUI()
 
         drawMenuButton("nav_spk_alert", 5, "ALERT", colors.gray)
         drawMenuButton("nav_spk_radio", 7, "RADIO", colors.gray)
+        drawMenuButton("nav_spk_broadcast", 9, "BROADCAST", colors.gray)
         drawMenuButton("nav_verw_settings", 14, "ZURUECK", colors.lightGray)
 
         drawDebugOverlay(15)
@@ -725,6 +779,81 @@ local function drawVerwSettingsSpkRadioUI()
     local isDirty = hasPendingRadioChanges()
     drawMenuButton(
         "radio_save_send",
+        13,
+        "SPEICHERN & SENDEN",
+        isDirty and colors.orange or colors.gray,
+        isDirty and colors.black or colors.white
+    )
+    drawMenuButton("nav_spk_settings", 15, "ZURUECK", colors.lightGray)
+
+    drawDebugOverlay(16)
+end
+
+spkCfg.drawVerwSettingsSpkBroadcastUI = function()
+    local w = term.getSize()
+    drawHeaderTitle(1, "--- BROADCAST ---", colors.magenta)
+
+    local boxW   = math.min(22, w - 2)
+    local startX = math.floor((w - boxW) / 2) + 1
+
+    -- Button neuer Track
+    addButton("bc_add_track", startX, 3, boxW, "[+] TRACK ZUFUEGEN", colors.green, colors.black)
+
+    local list = spkCfg.editBroadcastPlaylist or {}
+    local maxVisible = 4
+    local startIdx = (spkCfg.bcScrollOffset or 0) + 1
+    local endIdx = math.min(#list, startIdx + maxVisible - 1)
+
+    term.setCursorPos(startX, 4)
+    term.setBackgroundColor(colors.black)
+    term.setTextColor(colors.lightGray)
+    term.write(string.format("Tracks (24/7): %d", #list))
+
+    -- Scroll Pfeile oben rechts
+    if #list > maxVisible then
+        if (spkCfg.bcScrollOffset or 0) > 0 then
+            addButton("bc_scroll_up", startX + boxW - 5, 4, 2, "^", colors.lightGray, colors.black)
+        end
+        if endIdx < #list then
+            addButton("bc_scroll_dn", startX + boxW - 2, 4, 2, "v", colors.lightGray, colors.black)
+        end
+    end
+
+    local yCursor = 5
+    for i = startIdx, endIdx do
+        local trk = list[i]
+        local isSel = (spkCfg.selectedBcTrackIdx == i)
+        local bgCol = isSel and colors.cyan or colors.gray
+        local fgCol = isSel and colors.black or colors.white
+        local cleanName = (trk.title and not spkCfg.isBadTitle(trk.title, trk.id)) and trk.title or "YouTube-Video"
+        local titleStr = string.format("%d. %s", i, cleanName)
+        local dispText = getMarqueeText(titleStr, boxW, spkCfg.marqueeOffset or 0)
+        addButton("bc_track_" .. i, startX, yCursor, boxW, dispText, bgCol, fgCol)
+        yCursor = yCursor + 1
+    end
+
+    if #list == 0 then
+        term.setCursorPos(startX, 6)
+        term.setBackgroundColor(colors.black)
+        term.setTextColor(colors.gray)
+        term.write("Keine Tracks vorhanden.")
+    end
+
+    -- Aktionen fuer selektierten Track (Zeilen 10 & 11)
+    if spkCfg.selectedBcTrackIdx and list[spkCfg.selectedBcTrackIdx] then
+        addButton("bc_move_up", startX, 10, 10, "^ HOCH", colors.gray)
+        addButton("bc_move_dn", startX + 12, 10, 10, "v RUNTER", colors.gray)
+        addButton("bc_del_track", startX, 11, boxW, "X LOESCHEN", colors.red, colors.white)
+    else
+        term.setCursorPos(startX, 10)
+        term.setBackgroundColor(colors.black)
+        term.setTextColor(colors.gray)
+        term.write("[ Track oben waehlen ]")
+    end
+
+    local isDirty = spkCfg.hasPendingBroadcastChanges()
+    drawMenuButton(
+        "bc_save_send",
         13,
         "SPEICHERN & SENDEN",
         isDirty and colors.orange or colors.gray,
@@ -876,6 +1005,9 @@ local function drawTerminalsUI()
     elseif terminalFilter == "radio" then
         title = "--- RADIO-HOSTS ---"
         titleCol = colors.yellow
+    elseif terminalFilter == "broadcast" then
+        title = "--- BROADCAST-HOSTS ---"
+        titleCol = colors.magenta
     end
     drawHeaderTitle(1, title, titleCol)
 
@@ -894,7 +1026,7 @@ local function drawTerminalsUI()
             local displayLabel = tData.label or ("ID " .. tostring(tData.id))
             if tData.devType == "sign" and tData.preview and #tostring(tData.preview) > 0 then
                 displayLabel = "\"" .. tostring(tData.preview) .. "\""
-            elseif (tData.devType == "gps" or tData.devType == "speaker" or tData.devType == "radio") and tData.preview and #tostring(tData.preview) > 0 then
+            elseif (tData.devType == "gps" or tData.devType == "speaker" or tData.devType == "radio" or tData.devType == "broadcast") and tData.preview and #tostring(tData.preview) > 0 then
                 displayLabel = "[" .. tostring(tData.preview) .. "]"
             end
             local line1 = string.format("ID:%d | %s", tData.id, displayLabel)
@@ -946,6 +1078,7 @@ local function drawUI()
     elseif viewMode == "verw_settings_gps" then drawVerwSettingsGpsUI()
     elseif viewMode == "verw_settings_spk" or viewMode == "verw_settings_spk_alert" then drawVerwSettingsSpkUI()
     elseif viewMode == "verw_settings_spk_radio" then drawVerwSettingsSpkRadioUI()
+    elseif viewMode == "verw_settings_spk_broadcast" then spkCfg.drawVerwSettingsSpkBroadcastUI()
     elseif viewMode == "sign_blink" then drawSignBlinkUI()
     elseif viewMode == "console" then drawConsoleUI()
     elseif viewMode == "terminals" then drawTerminalsUI()
@@ -1097,6 +1230,10 @@ local function handleAction(id)
         rednet.broadcast({ action = "update" }, spkCfg.protoRadioUpdate)
         addLog(0, true, "Sende GitHub-Update: Radio-Host", "Master", "Master", nil)
         addDebugMsg("Update an Radio-Host gesendet!")
+    elseif id == "update_broadcast" then
+        rednet.broadcast({ action = "update" }, spkCfg.protoBroadcastUpdate)
+        addLog(0, true, "Sende GitHub-Update: Broadcast-Host", "Master", "Master", nil)
+        addDebugMsg("Update an Broadcast-Host gesendet!")
     elseif id == "update_master" then
         applyMasterSelfUpdate()
     
@@ -1107,6 +1244,7 @@ local function handleAction(id)
     elseif id == "terminals_gps" then terminalFilter = "gps"; viewMode = "terminals"; scrollOffset = 0
     elseif id == "terminals_speakers" then terminalFilter = "speakers"; viewMode = "terminals"; scrollOffset = 0
     elseif id == "terminals_radio" then terminalFilter = "radio"; viewMode = "terminals"; scrollOffset = 0
+    elseif id == "terminals_broadcast" then terminalFilter = "broadcast"; viewMode = "terminals"; scrollOffset = 0
     
     elseif id == "geraete_del" then
         local idNum = editInput("Geraete ID zum Loeschen:", true)
@@ -1124,7 +1262,7 @@ local function handleAction(id)
         scrollOffset = 0
         addDebugMsg("Geraeteliste geleert.")
     elseif id == "geraete_ref" then
-        -- Sendet Status-Request an alle Geraete-Typen inklusive GPS-Hosts, Lautsprecher & Radio-Hosts!
+        -- Sendet Status-Request an alle Geraete-Typen inklusive GPS-Hosts, Lautsprecher, Radio- & Broadcast-Hosts!
         rednet.broadcast("STATUS_REQUEST", STATUS_PROTOCOL)
         rednet.broadcast("STATUS_REQUEST", UPDATE_PROTOCOL_TERM)
         rednet.broadcast("STATUS_REQUEST", CONFIG_PROTOCOL_DOOR)
@@ -1136,6 +1274,8 @@ local function handleAction(id)
         rednet.broadcast("STATUS_REQUEST", UPDATE_PROTOCOL_SPK)
         rednet.broadcast("STATUS_REQUEST", spkCfg.protoRadioConfig)
         rednet.broadcast("STATUS_REQUEST", spkCfg.protoRadioUpdate)
+        rednet.broadcast("STATUS_REQUEST", spkCfg.protoBroadcastConfig)
+        rednet.broadcast("STATUS_REQUEST", spkCfg.protoBroadcastUpdate)
         addDebugMsg("Ping an alle Geraete gesendet...")
     
     elseif id == "console_clr" then
@@ -1163,7 +1303,7 @@ local function handleAction(id)
         addLog(0, true, "Sende Relocate an alle GPS-Hosts", "Master", "Master", nil)
         addDebugMsg("Relocate-Befehl an alle GPS-Hosts gesendet.")
 
-    -- Einstellungen: Lautsprecher Alarm- & Radio-Konfiguration
+    -- Einstellungen: Lautsprecher Alarm-, Radio- & Broadcast-Konfiguration
     elseif id == "nav_spk_radio" then
         spkCfg.selectedTrackIdx  = nil
         spkCfg.radioScrollOffset = 0
@@ -1238,6 +1378,81 @@ local function handleAction(id)
         addLog(0, true, string.format("Sende Radio (%d Tracks)", #spkCfg.radioPlaylist), "Master", "Master", nil)
         addDebugMsg(string.format("Radio gesendet (%d)", #spkCfg.radioPlaylist))
 
+    -- Broadcast-Playlist Aktionen
+    elseif id == "nav_spk_broadcast" then
+        spkCfg.selectedBcTrackIdx = nil
+        spkCfg.bcScrollOffset     = 0
+        spkCfg.editBroadcastPlaylist = {}
+        for _, t in ipairs(spkCfg.broadcastPlaylist or {}) do
+            table.insert(spkCfg.editBroadcastPlaylist, { id = t.id, title = t.title })
+        end
+        viewMode = "verw_settings_spk_broadcast"
+        scrollOffset = 0
+    elseif id == "bc_scroll_up" then
+        spkCfg.bcScrollOffset = math.max(0, (spkCfg.bcScrollOffset or 0) - 1)
+    elseif id == "bc_scroll_dn" then
+        local maxOff = math.max(0, #(spkCfg.editBroadcastPlaylist or {}) - 4)
+        spkCfg.bcScrollOffset = math.min(maxOff, (spkCfg.bcScrollOffset or 0) + 1)
+    elseif id:match("^bc_track_(%d+)$") then
+        local sel = tonumber(id:match("^bc_track_(%d+)$"))
+        if spkCfg.selectedBcTrackIdx == sel then
+            spkCfg.selectedBcTrackIdx = nil
+        else
+            spkCfg.selectedBcTrackIdx = sel
+        end
+    elseif id == "bc_move_up" then
+        local sel = spkCfg.selectedBcTrackIdx
+        if sel and sel > 1 then
+            local tmp = spkCfg.editBroadcastPlaylist[sel]
+            spkCfg.editBroadcastPlaylist[sel] = spkCfg.editBroadcastPlaylist[sel - 1]
+            spkCfg.editBroadcastPlaylist[sel - 1] = tmp
+            spkCfg.selectedBcTrackIdx = sel - 1
+        end
+    elseif id == "bc_move_dn" then
+        local sel = spkCfg.selectedBcTrackIdx
+        if sel and sel < #(spkCfg.editBroadcastPlaylist or {}) then
+            local tmp = spkCfg.editBroadcastPlaylist[sel]
+            spkCfg.editBroadcastPlaylist[sel] = spkCfg.editBroadcastPlaylist[sel + 1]
+            spkCfg.editBroadcastPlaylist[sel + 1] = tmp
+            spkCfg.selectedBcTrackIdx = sel + 1
+        end
+    elseif id == "bc_del_track" then
+        local sel = spkCfg.selectedBcTrackIdx
+        if sel and spkCfg.editBroadcastPlaylist[sel] then
+            table.remove(spkCfg.editBroadcastPlaylist, sel)
+            spkCfg.selectedBcTrackIdx = nil
+        end
+    elseif id == "bc_add_track" then
+        local input = editInput("YT-Link einfuegen:", false)
+        if input and #input > 0 then
+            addDebugMsg("Lade Videotitel...")
+            drawUI()
+            local vid, title = spkCfg.fetchVideoInfo(input)
+            if vid ~= "" then
+                table.insert(spkCfg.editBroadcastPlaylist, { id = vid, title = title })
+                spkCfg.selectedBcTrackIdx = #spkCfg.editBroadcastPlaylist
+                addDebugMsg("Gefunden: " .. title:sub(1, 14))
+            else
+                addDebugMsg("Fehler: Kein Video gefunden!")
+            end
+        end
+    elseif id == "bc_save_send" then
+        spkCfg.broadcastPlaylist = {}
+        for _, t in ipairs(spkCfg.editBroadcastPlaylist or {}) do
+            table.insert(spkCfg.broadcastPlaylist, { id = t.id, title = t.title })
+        end
+        saveMasterConfig()
+        rednet.broadcast({
+            action   = "set_broadcast_playlist",
+            playlist = spkCfg.broadcastPlaylist
+        }, CONFIG_PROTOCOL_SPK)
+        rednet.broadcast({
+            action   = "set_broadcast_playlist",
+            playlist = spkCfg.broadcastPlaylist
+        }, spkCfg.protoBroadcastConfig)
+        addLog(0, true, string.format("Sende Broadcast (%d Tracks)", #spkCfg.broadcastPlaylist), "Master", "Master", nil)
+        addDebugMsg(string.format("Broadcast gesendet (%d)", #spkCfg.broadcastPlaylist))
+
     elseif id == "spk_edit_em" then
         local val = editInput("Emergency-Link (-=Leer):", false)
         if val == "-" then
@@ -1284,15 +1499,16 @@ local function handleAction(id)
         spkCfg.alarmVol       = spkCfg.editAlarmVol or 100
         saveMasterConfig()
         rednet.broadcast({
-            action         = "set_alarm_config",
-            emergencyUrl   = spkCfg.emergencyUrl,
-            emergencyTitle = spkCfg.emergencyTitle,
-            lockdownUrl    = spkCfg.lockdownUrl,
-            lockdownTitle  = spkCfg.lockdownTitle,
-            alarmVol       = spkCfg.alarmVol,
-            alarmVolPct    = spkCfg.alarmVol,
-            radioPlaylist  = spkCfg.radioPlaylist or {},
-            isReply        = false
+            action            = "set_alarm_config",
+            emergencyUrl      = spkCfg.emergencyUrl,
+            emergencyTitle    = spkCfg.emergencyTitle,
+            lockdownUrl       = spkCfg.lockdownUrl,
+            lockdownTitle     = spkCfg.lockdownTitle,
+            alarmVol          = spkCfg.alarmVol,
+            alarmVolPct       = spkCfg.alarmVol,
+            radioPlaylist     = spkCfg.radioPlaylist or {},
+            broadcastPlaylist = spkCfg.broadcastPlaylist or {},
+            isReply           = false
         }, CONFIG_PROTOCOL_SPK)
         addLog(0, true, string.format("Sende Speaker-Alarm-Sync (Vol:%d%%)", spkCfg.alarmVol), "Master", "Master", nil)
         addDebugMsg("Gespeichert und an alle Speaker gesendet.")
@@ -1378,7 +1594,7 @@ local function main()
         elseif event == "rednet_message" then
             local id, message, protocol = p1, p2, p3
 
-            if (protocol == UPDATE_PROTOCOL_TERM or protocol == UPDATE_PROTOCOL_DOOR or protocol == UPDATE_PROTOCOL_SIGN or protocol == UPDATE_PROTOCOL_GPS or protocol == UPDATE_PROTOCOL_SPK or protocol == CONFIG_PROTOCOL_DOOR or protocol == CONFIG_PROTOCOL_SIGN or protocol == CONFIG_PROTOCOL_GPS or protocol == CONFIG_PROTOCOL_SPK or protocol == spkCfg.protoRadioUpdate or protocol == spkCfg.protoRadioConfig) and type(message) == "table" then
+            if (protocol == UPDATE_PROTOCOL_TERM or protocol == UPDATE_PROTOCOL_DOOR or protocol == UPDATE_PROTOCOL_SIGN or protocol == UPDATE_PROTOCOL_GPS or protocol == UPDATE_PROTOCOL_SPK or protocol == CONFIG_PROTOCOL_DOOR or protocol == CONFIG_PROTOCOL_SIGN or protocol == CONFIG_PROTOCOL_GPS or protocol == CONFIG_PROTOCOL_SPK or protocol == spkCfg.protoRadioUpdate or protocol == spkCfg.protoRadioConfig or protocol == spkCfg.protoBroadcastUpdate or protocol == spkCfg.protoBroadcastConfig) and type(message) == "table" then
                 if message.action == "log_report" then
                     addLog(id, message.success, message.details, message.pos, message.label, protocol, message.preview, message.devType)
                     if viewMode == "console" or viewMode == "terminals" then drawUI() end
@@ -1390,17 +1606,18 @@ local function main()
                         blinkOff   = signBlinkOff,
                         isReply    = true
                     }, CONFIG_PROTOCOL_SIGN)
-                elseif protocol == CONFIG_PROTOCOL_SPK and (message.action == "request_speaker_sync" or message.action == "request_radio_sync") then
+                elseif protocol == CONFIG_PROTOCOL_SPK and (message.action == "request_speaker_sync" or message.action == "request_radio_sync" or message.action == "request_broadcast_sync") then
                     rednet.send(id, {
-                        action         = "set_alarm_config",
-                        emergencyUrl   = spkCfg.emergencyUrl or "",
-                        emergencyTitle = spkCfg.emergencyTitle or "",
-                        lockdownUrl    = spkCfg.lockdownUrl or "",
-                        lockdownTitle  = spkCfg.lockdownTitle or "",
-                        alarmVol       = spkCfg.alarmVol or 100,
-                        alarmVolPct    = spkCfg.alarmVol or 100,
-                        radioPlaylist  = spkCfg.radioPlaylist or {},
-                        isReply        = true
+                        action            = "set_alarm_config",
+                        emergencyUrl      = spkCfg.emergencyUrl or "",
+                        emergencyTitle    = spkCfg.emergencyTitle or "",
+                        lockdownUrl       = spkCfg.lockdownUrl or "",
+                        lockdownTitle     = spkCfg.lockdownTitle or "",
+                        alarmVol          = spkCfg.alarmVol or 100,
+                        alarmVolPct       = spkCfg.alarmVol or 100,
+                        radioPlaylist     = spkCfg.radioPlaylist or {},
+                        broadcastPlaylist = spkCfg.broadcastPlaylist or {},
+                        isReply           = true
                     }, CONFIG_PROTOCOL_SPK)
                 elseif protocol == spkCfg.protoRadioConfig and message.action == "request_radio_sync" then
                     rednet.send(id, {
@@ -1408,6 +1625,12 @@ local function main()
                         playlist  = spkCfg.radioPlaylist or {},
                         isReply   = true
                     }, spkCfg.protoRadioConfig)
+                elseif protocol == spkCfg.protoBroadcastConfig and message.action == "request_broadcast_sync" then
+                    rednet.send(id, {
+                        action    = "set_broadcast_playlist",
+                        playlist  = spkCfg.broadcastPlaylist or {},
+                        isReply   = true
+                    }, spkCfg.protoBroadcastConfig)
                 end
             elseif protocol == STATUS_PROTOCOL and (message == "EMERGENCY_ON" or message == "EMERGENCY_OFF") then
                 local existingPos = registeredTerminals[id] and registeredTerminals[id].pos or "Terminal"
@@ -1427,7 +1650,7 @@ local function main()
                     changed = true
                 end
             end
-            if changed or viewMode == "verw_settings_spk_radio" or viewMode == "verw_settings_spk_alert" then
+            if changed or viewMode == "verw_settings_spk_radio" or viewMode == "verw_settings_spk_broadcast" or viewMode == "verw_settings_spk_alert" then
                 drawUI()
             end
         end

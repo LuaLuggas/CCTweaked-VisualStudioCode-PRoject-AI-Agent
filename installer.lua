@@ -17,11 +17,12 @@ local ROLES = {
     { key = "4", id = "TextAnzeige",       title = "4: TextAnzeige",       path = "programme/TextAnzeige/startup.lua" },
     { key = "5", id = "GPSHost",           title = "5: GPSHost",           path = "programme/GPSHost/startup.lua" },
     { key = "6", id = "Lautsprecher",      title = "6: Lautsprecher",      path = "programme/Lautsprecher/startup.lua" },
-    { key = "7", id = "RadioHost",         title = "7: RadioHost",         path = "programme/RadioHost/startup.lua" }
+    { key = "7", id = "RadioHost",         title = "7: RadioHost",         path = "programme/RadioHost/startup.lua" },
+    { key = "8", id = "BroadcastHost",     title = "8: BroadcastHost",     path = "programme/BroadcastHost/startup.lua" }
 }
 
 local buttons = {}
-local statusText = "Rolle per Klick oder Taste 1-7 waehlen"
+local statusText = "Rolle per Klick oder Taste 1-8 waehlen"
 local statusCol  = colors.lightGray
 
 local function fetchFile(repoPath)
@@ -125,6 +126,7 @@ local function findRoleByArg(arg)
     elseif clean == "gps" or clean == "gpshost" then return ROLES[5]
     elseif clean == "lautsprecher" or clean == "speaker" or clean == "speakers" then return ROLES[6]
     elseif clean == "radio" or clean == "radiohost" then return ROLES[7]
+    elseif clean == "broadcast" or clean == "broadcasthost" then return ROLES[8]
     end
     return nil
 end
@@ -164,11 +166,17 @@ local function drawMenu()
 
     local btnW = math.min(24, w - 2)
     local btnX = math.floor((w - btnW) / 2) + 1
+    local halfW = 11
 
-    for i, r in ipairs(ROLES) do
+    for i = 1, 6 do
+        local r = ROLES[i]
         local y = 2 + (i * 2)
         addButton(r.key, btnX, y, btnW, r.title, colors.gray, colors.white)
     end
+
+    -- Rolle 7 (RadioHost) & Rolle 8 (BroadcastHost) nebeneinander auf Zeile 16
+    addButton(ROLES[7].key, btnX, 16, halfW, "7: Radio", colors.gray, colors.white)
+    addButton(ROLES[8].key, btnX + 13, 16, halfW, "8: Broadc.", colors.gray, colors.white)
 
     local quitY = math.min(h - 1, 18)
     addButton("quit", btnX, quitY, btnW, "ABBRECHEN [Q]", colors.lightGray, colors.black)
@@ -186,7 +194,7 @@ if args[1] then
     local roleObj = findRoleByArg(args[1])
     if not roleObj then
         printError("Unbekannte Rolle: " .. tostring(args[1]))
-        print("Verfuegbar: MasterComputer, EmergencyTerminal, Tuersensor, TextAnzeige, GPSHost, Lautsprecher, RadioHost (oder 1-7)")
+        print("Verfuegbar: MasterComputer, EmergencyTerminal, Tuersensor, TextAnzeige, GPSHost, Lautsprecher, RadioHost, BroadcastHost (oder 1-8)")
         return
     end
     print("Installiere Rolle: " .. roleObj.id .. " ...")
