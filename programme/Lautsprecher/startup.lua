@@ -37,6 +37,7 @@ local CFG = {
     -- Bis zu 24 Chunks (~384 KB) im RAM cachen fuer nahtlosen Loop ohne Nachladen
     MAX_CACHE_CHUNKS = 24,
     CHUNK_SIZE       = 16 * 1024,
+    SYNC_CHUNK_MS    = 500,
 
     MAX_LOG = 2,
     LOG_TTL = 5
@@ -51,6 +52,7 @@ local state = {
     localVideoId    = "",
     localTitle      = "Kein Video",
     volumePct       = 50,     -- 0 bis 100 (100% = 3.0 in CC:Tweaked)
+    alarmVolSync    = true,   -- true = Master-Alarm-Lautstaerke nutzen, false = eigene Lautstaerke nutzen
     loopEnabled     = true,
     triggerMode     = 1,      -- 1=MANUELL, 2=REDSTONE, 3=SPIELER, 4=FUNK, 5=RADIO
     sensorRange     = 5,
@@ -82,12 +84,14 @@ local state = {
     -- Laufzeit-Zustaende
     emergencyActive = false,
     lockdownActive  = false,
+    alarmStartUtc   = 0,
+    lastHostAlarmUtc = 0,
     updatingState   = false,
     rsTriggered     = false,
     playerTriggered = false,
     remoteTriggered = false,
 
-    -- Audio-Engine & HTTP-Streaming
+    -- Audio-Engine & HTTP-Streaming (Lokal)
     speakers        = {},
     modem           = nil,
     detector        = nil,
@@ -101,6 +105,19 @@ local state = {
     pendingBuffer   = nil,
     isLoadingAudio  = false,
     audioError      = nil,
+
+    -- Synchron-Empfangs-Queue (playAt & seq vom RadioHost fuer Radio & Alarm)
+    rxDecoder       = dfpwm.make_decoder(),
+    rxStreamId      = nil,
+    rxStreamType    = nil,
+    rxQueue         = {},
+    lastPlayedSeq   = 0,
+    lastPlayAt      = 0,
+    rxPendingBuffer = nil,
+    rxPendingVol    = 1.5,
+    rxPendingPlayAt = 0,
+    syncTimer       = nil,
+    fallbackTimer   = nil,
 
     -- RAM-Cache fuer kurzen/mittellangen Loop-Sound (verhindert Lade-Pause beim Loop)
     cacheId         = nil,
@@ -118,11 +135,12 @@ local state = {
 }
 
 local hitboxes = {
-    urlField   = nil,
-    clearBtn   = nil,
-    saveUrlBtn = nil,
-    playBtn    = nil,
-    loopBtn    = nil,
+    urlField     = nil,
+    clearBtn     = nil,
+    saveUrlBtn   = nil,
+    playBtn      = nil,
+    loopBtn      = nil,
+    alarmSyncBtn = nil,
     modeBtn    = nil,
     rangeDec   = nil,
     rangeInc   = nil,
@@ -226,6 +244,7 @@ local function saveConfig()
         localVideoId   = state.localVideoId,
         localTitle     = state.localTitle,
         volumePct      = state.volumePct,
+        alarmVolSync   = state.alarmVolSync,
         loopEnabled    = state.loopEnabled,
         triggerMode    = state.triggerMode,
         sensorRange    = state.sensorRange,
@@ -257,6 +276,7 @@ local function loadConfig()
                 if type(data.localVideoId) == "string" then state.localVideoId = data.localVideoId end
                 if type(data.localTitle) == "string" then state.localTitle = state.cleanTitle(data.localTitle) end
                 if type(data.volumePct) == "number" then state.volumePct = math.max(0, math.min(100, data.volumePct)) end
+                if type(data.alarmVolSync) == "boolean" then state.alarmVolSync = data.alarmVolSync end
                 if type(data.loopEnabled) == "boolean" then state.loopEnabled = data.loopEnabled end
                 if type(data.triggerMode) == "number" and CFG.MODES[data.triggerMode] then state.triggerMode = data.triggerMode end
                 if type(data.sensorRange) == "number" then state.sensorRange = math.max(1, math.min(50, data.sensorRange)) end
@@ -391,33 +411,60 @@ local function closeStreamHandle()
     end
 end
 
-local function stopAllSpeakers()
+state.getEffectiveAlarmVol = function()
+    local pct = state.alarmVolSync and state.alarmVolumePct or state.volumePct
+    return (pct / 100) * 3.0
+end
+
+state.stopLocalStream = function()
     closeStreamHandle()
     state.pendingBuffer  = nil
     state.activeTargetId = nil
     state.loadingUrl     = nil
     state.isLoadingAudio = false
+    state.dirty          = true
+end
+
+local function stopAllSpeakers()
+    state.stopLocalStream()
+    state.rxQueue         = {}
+    state.lastPlayedSeq   = 0
+    state.lastPlayAt      = 0
+    state.rxPendingBuffer = nil
+    state.rxDecoder       = dfpwm.make_decoder()
     for _, spk in ipairs(state.speakers) do
         pcall(spk.stop)
     end
     state.dirty = true
 end
 
--- Ermittelt, welche Video-ID aktuell abgespielt werden soll (Prioritaet: Lockdown > Emergency > Lokal)
+-- Ermittelt, welche Video-ID LOKAL per HTTP gestreamt werden soll.
+-- Wenn der RadioHost aktiv streamt (im RADIO-Modus oder bei Alarm), gibt diese Funktion nil zurueck,
+-- damit die Synchron-Empfangs-Queue (processRxQueue) ungestoert abspielen kann!
 local function getDesiredPlayback()
     if state.updatingState then
         return nil, 0, false
     end
-    if state.lockdownActive then
-        if state.lockdownId ~= "" then
-            return state.lockdownId, (state.alarmVolumePct / 100) * 3.0, true
+    if state.lockdownActive or state.emergencyActive then
+        local nowUtc = os.epoch("utc")
+        local hostStreamingAlarm = (nowUtc - (state.lastHostAlarmUtc or 0) < 3000) or (nowUtc - (state.alarmStartUtc or 0) < 3000)
+        if hostStreamingAlarm then
+            -- Synchron-Stream vom zentralen RadioHost hat Vorrang!
+            return nil, 0, false
         end
-        return nil, 0, false
-    elseif state.emergencyActive then
-        if state.emergencyId ~= "" then
-            return state.emergencyId, (state.alarmVolumePct / 100) * 3.0, true
+        -- Lokaler Fallback (nur falls RadioHost offline/stromlos ist und >3s kein Paket kam)
+        local alarmVol = state.getEffectiveAlarmVol()
+        if state.lockdownActive then
+            if state.lockdownId ~= "" then
+                return state.lockdownId, alarmVol, true
+            end
+            return nil, 0, false
+        elseif state.emergencyActive then
+            if state.emergencyId ~= "" then
+                return state.emergencyId, alarmVol, true
+            end
+            return nil, 0, false
         end
-        return nil, 0, false
     end
 
     -- Normalbetrieb: Je nach gewaehltem Trigger-Modus
@@ -434,7 +481,7 @@ local function getDesiredPlayback()
     elseif mode == "FUNK" then
         shouldPlay = state.remoteTriggered
     elseif mode == "RADIO" then
-        -- Radio-Stream laeuft synchron ueber den zentralen RadioHost per Rednet (DFPWM Chunks)
+        -- Radio-Stream laeuft synchron ueber den zentralen RadioHost per Rednet (playAt & seq)
         return nil, 0, false
     end
 
@@ -457,6 +504,148 @@ local function pushBufferToSpeakers(pcmBuffer, vol)
         end
     end
     return allAccepted
+end
+
+-- Verarbeitet die geplante Synchron-Warteschlange (playAt & seq vom RadioHost)
+state.processRxQueue = function()
+    if #state.speakers == 0 then return end
+    local nowUtc = os.epoch("utc")
+
+    -- 1. Falls ein Puffer wegen vollem Speaker-Buffer auf speaker_audio_empty gewartet hat
+    if state.rxPendingBuffer then
+        if nowUtc < state.rxPendingPlayAt + 450 then
+            if pushBufferToSpeakers(state.rxPendingBuffer, state.rxPendingVol) then
+                state.rxPendingBuffer = nil
+            else
+                return
+            end
+        else
+            state.rxPendingBuffer = nil
+        end
+    end
+
+    -- 2. Veraltete Chunks (> 450ms ueberfaellig) verwerfen, aber Decoder warmhalten
+    local minSeq = nil
+    for seq, pkt in pairs(state.rxQueue) do
+        if nowUtc >= pkt.playAt + 450 then
+            pcall(state.rxDecoder, pkt.chunk)
+            if seq > state.lastPlayedSeq then
+                state.lastPlayedSeq = seq
+                state.lastPlayAt    = pkt.playAt
+            end
+            state.rxQueue[seq] = nil
+        else
+            if not minSeq or seq < minSeq then
+                minSeq = seq
+            end
+        end
+    end
+
+    if not minSeq then return end
+
+    local nextSeq = (state.lastPlayedSeq == 0) and minSeq or (state.lastPlayedSeq + 1)
+    local pkt = state.rxQueue[nextSeq]
+
+    local function getSyncVol(sType)
+        if sType == "emergency" or sType == "lockdown" then
+            return state.getEffectiveAlarmVol()
+        end
+        return (state.volumePct / 100) * 3.0
+    end
+
+    -- 3. Erster Chunk nach Start / Chunkload / Resync: Punktgenau warten oder Samples beschneiden!
+    if state.lastPlayedSeq == 0 and pkt then
+        if nowUtc < pkt.playAt - 25 then
+            state.syncTimer = os.startTimer(math.max(0.05, (pkt.playAt - nowUtc) / 1000))
+            return
+        end
+        local ok, fullPcm = pcall(state.rxDecoder, pkt.chunk)
+        state.rxQueue[nextSeq] = nil
+        state.lastPlayedSeq    = nextSeq
+        state.lastPlayAt       = pkt.playAt
+        if ok and fullPcm then
+            local offsetMs  = nowUtc - pkt.playAt
+            local pcmToPlay = fullPcm
+            if offsetMs > 50 and offsetMs < 450 then
+                -- Spaeter Einstieg / Lag: Samples am Anfang abschneiden, damit Chunk-Ende exakt synchron ist!
+                local skipSamples = math.floor(offsetMs * 48)
+                if skipSamples > 0 and skipSamples < #fullPcm then
+                    pcmToPlay = {}
+                    for i = skipSamples + 1, #fullPcm do
+                        pcmToPlay[#pcmToPlay + 1] = fullPcm[i]
+                    end
+                end
+            end
+            local vol = getSyncVol(pkt.streamType)
+            if not pushBufferToSpeakers(pcmToPlay, vol) then
+                state.rxPendingBuffer = pcmToPlay
+                state.rxPendingVol    = vol
+                state.rxPendingPlayAt = pkt.playAt
+                return
+            end
+        end
+        state.syncTimer = os.startTimer(0.45)
+        return
+    end
+
+    -- 4. Folge-Chunks im laufenden Synchron-Betrieb
+    local expectedPlayAt = (pkt and pkt.playAt) or (state.lastPlayAt + CFG.SYNC_CHUNK_MS)
+    if nowUtc < expectedPlayAt - 50 then
+        state.syncTimer = os.startTimer(math.max(0.05, (expectedPlayAt - 25 - nowUtc) / 1000))
+        return
+    end
+
+    if pkt then
+        local ok, pcm = pcall(state.rxDecoder, pkt.chunk)
+        state.rxQueue[nextSeq] = nil
+        state.lastPlayedSeq    = nextSeq
+        state.lastPlayAt       = pkt.playAt
+        if ok and pcm then
+            local vol = getSyncVol(pkt.streamType)
+            if not pushBufferToSpeakers(pcm, vol) then
+                state.rxPendingBuffer = pcm
+                state.rxPendingVol    = vol
+                state.rxPendingPlayAt = pkt.playAt
+                return
+            end
+        end
+        state.syncTimer = os.startTimer(0.45)
+    elseif nowUtc >= expectedPlayAt and minSeq and minSeq > nextSeq then
+        -- Fehlende Sequenznummer mit Stille gleicher Laenge (24.000 Samples = 500ms) fuellen
+        local silence = {}
+        for i = 1, 24000 do silence[i] = 0 end
+        state.lastPlayedSeq = nextSeq
+        state.lastPlayAt    = expectedPlayAt
+        local vol = getSyncVol(state.rxStreamType)
+        if not pushBufferToSpeakers(silence, vol) then
+            state.rxPendingBuffer = silence
+            state.rxPendingVol    = vol
+            state.rxPendingPlayAt = expectedPlayAt
+            return
+        end
+        state.syncTimer = os.startTimer(0.45)
+    end
+end
+
+state.enqueueRxChunk = function(pkt)
+    if type(pkt) ~= "table" or not pkt.chunk then return end
+    local seq = tonumber(pkt.seq) or 1
+    local playAt = tonumber(pkt.playAt) or os.epoch("utc")
+    pkt.seq = seq
+    pkt.playAt = playAt
+
+    if pkt.streamId and pkt.streamId ~= state.rxStreamId then
+        stopAllSpeakers()
+        state.rxStreamId   = pkt.streamId
+        state.rxStreamType = pkt.streamType or "radio"
+    end
+
+    if seq <= state.lastPlayedSeq or state.rxQueue[seq] then
+        return -- Duplikat ignorieren
+    end
+
+    state.rxQueue[seq] = pkt
+    state.processRxQueue()
 end
 
 -- Startet den Download-Stream fuer eine Video-ID
@@ -607,7 +796,7 @@ local function syncAudioEngine()
     local desiredId = getDesiredPlayback()
     if not desiredId then
         if state.activeTargetId or state.isLoadingAudio then
-            stopAllSpeakers()
+            state.stopLocalStream()
         end
         return
     end
@@ -655,17 +844,18 @@ local function drawUI()
     term.setBackgroundColor(colors.black)
     term.clear()
 
-    hitboxes.urlField   = nil
-    hitboxes.clearBtn   = nil
-    hitboxes.saveUrlBtn = nil
-    hitboxes.playBtn    = nil
-    hitboxes.loopBtn    = nil
-    hitboxes.modeBtn    = nil
-    hitboxes.rangeDec   = nil
-    hitboxes.rangeInc   = nil
-    hitboxes.volDec     = nil
-    hitboxes.volBar     = nil
-    hitboxes.volInc     = nil
+    hitboxes.urlField     = nil
+    hitboxes.clearBtn     = nil
+    hitboxes.saveUrlBtn   = nil
+    hitboxes.playBtn      = nil
+    hitboxes.loopBtn      = nil
+    hitboxes.alarmSyncBtn = nil
+    hitboxes.modeBtn      = nil
+    hitboxes.rangeDec     = nil
+    hitboxes.rangeInc     = nil
+    hitboxes.volDec       = nil
+    hitboxes.volBar       = nil
+    hitboxes.volInc       = nil
 
     local modeName    = CFG.MODES[state.triggerMode] or "MANUELL"
     local isRadioMode = (modeName == "RADIO")
@@ -906,20 +1096,45 @@ local function drawUI()
     hitboxes.volBar = { x1 = barX + 3, x2 = barX + 2 + bW, y = volY, width = bW }
     hitboxes.volInc = { x1 = barX + 3 + bW, x2 = barX + 5 + bW, y = volY }
 
-    -- 7. Master-Alarm-Info & Update-Zeitstempel (zeigt echte Videonamen statt IDs!)
+    -- 7. Alarm-Lautstaerke Sync-Schalter (Master-Lautstaerke vs. eigene Lautstaerke)
+    term.setCursorPos(2, 14)
     term.setBackgroundColor(colors.black)
     term.setTextColor(colors.lightGray)
-    term.setCursorPos(2, 14)
+    term.write("Alarm-Lautst.: ")
+
+    local syncX = 17
+    term.setCursorPos(syncX, 14)
+    if state.alarmVolSync then
+        term.setBackgroundColor(colors.cyan)
+        term.setTextColor(colors.black)
+        term.write(" [x] Sync ")
+    else
+        term.setBackgroundColor(colors.gray)
+        term.setTextColor(colors.white)
+        term.write(" [ ] Sync ")
+    end
+    hitboxes.alarmSyncBtn = { x1 = syncX, x2 = syncX + 9, y = 14 }
+
+    term.setBackgroundColor(colors.black)
+    term.setTextColor(colors.lightGray)
+    if state.alarmVolSync then
+        term.write(string.format(" (Master: %d%%)", tonumber(state.alarmVolumePct) or 100))
+    else
+        term.write(string.format(" (Manuell: %d%%)", tonumber(state.volumePct) or 50))
+    end
+
+    -- 8. Master-Alarm-Info & Update-Zeitstempel (zeigt echte Videonamen statt IDs!)
+    term.setCursorPos(2, 15)
     local emStat = (state.emergencyId ~= "") and ((not state.isBadTitle(state.emergencyTitle, state.emergencyId)) and state.emergencyTitle or "Gesetzt") or "Aus"
     local ldStat = (state.lockdownId ~= "") and ((not state.isBadTitle(state.lockdownTitle, state.lockdownId)) and state.lockdownTitle or "Gesetzt") or "Aus"
-    local alarmInfo = string.format("Alert(%d%%): EM[%s] LD[%s]", state.alarmVolumePct, emStat, ldStat)
+    local alarmInfo = string.format("Alert-Sounds: EM[%s] LD[%s]", emStat, ldStat)
     term.write(pad(getMarqueeText(alarmInfo, w - 2, state.marqueeOffset), w - 2))
 
-    term.setCursorPos(2, 15)
+    term.setCursorPos(2, 16)
     local updInfo = string.format("letz. Update: [%s] [%s]", tostring(state.lastUpdateTime), tostring(state.lastUpdateStat))
     term.write(updInfo:sub(1, w - 2))
 
-    -- 8. Temporaere Debug-Logs unten
+    -- 9. Temporaere Debug-Logs unten
     term.setTextColor(colors.gray)
     local startRow = h - #state.logs + 1
     for i, entry in ipairs(state.logs) do
@@ -1141,6 +1356,7 @@ local function main()
 
         -- 1. Audio-Feeding (nicht-blockierend pro Chunk)
         if ev == "speaker_audio_empty" or ev == "speaker_feed" then
+            state.processRxQueue()
             feedNextAudioChunk()
 
         -- 2. HTTP-Antworten fuer Audio-Stream & YouTube-Titel/Suche
@@ -1318,6 +1534,17 @@ local function main()
                     saveConfig()
                     addLog(state.loopEnabled and "Loop aktiviert." or "Loop deaktiviert (1x abspielen).")
                     state.dirty = true
+                elseif hitboxes.alarmSyncBtn and y == hitboxes.alarmSyncBtn.y and x >= hitboxes.alarmSyncBtn.x1 and x <= hitboxes.alarmSyncBtn.x2 then
+                    state.focusUrl     = false
+                    state.fieldUrl     = ""
+                    state.alarmVolSync = not state.alarmVolSync
+                    saveConfig()
+                    if state.alarmVolSync then
+                        addLog("Alarm-Lautstaerke: Sync mit Master (" .. tostring(state.alarmVolPct or 100) .. "%)")
+                    else
+                        addLog("Alarm-Lautstaerke: Manuell (" .. tostring(state.volumePct or 50) .. "%)")
+                    end
+                    state.dirty = true
                 elseif hitboxes.modeBtn and y == hitboxes.modeBtn.y and x >= hitboxes.modeBtn.x1 and x <= hitboxes.modeBtn.x2 then
                     state.focusUrl        = false
                     state.fieldUrl        = ""
@@ -1326,6 +1553,7 @@ local function main()
                     state.playerTriggered = false
                     state.remoteTriggered = false
                     saveConfig()
+                    stopAllSpeakers()
                     checkTriggers()
                     syncAudioEngine()
                     sendReport(true, "Modus: " .. CFG.MODES[state.triggerMode])
@@ -1374,10 +1602,14 @@ local function main()
             if protocol == CFG.PROTOCOL and not state.updatingState then
                 if message == CFG.MSG_ON and not state.emergencyActive then
                     state.emergencyActive = true
+                    state.alarmStartUtc   = os.epoch("utc")
+                    state.fallbackTimer   = os.startTimer(3.1)
+                    stopAllSpeakers()
                     syncAudioEngine()
                     addLog("EMERGENCY-ALARM aktiviert!")
                 elseif message == CFG.MSG_OFF and state.emergencyActive then
                     state.emergencyActive = false
+                    stopAllSpeakers()
                     syncAudioEngine()
                     addLog("Emergency beendet -> Vorheriger Modus.")
                 end
@@ -1386,10 +1618,14 @@ local function main()
             elseif protocol == CFG.LOCKDOWN_PROTOCOL and not state.updatingState then
                 if message == CFG.MSG_LOCK and not state.lockdownActive then
                     state.lockdownActive = true
+                    state.alarmStartUtc  = os.epoch("utc")
+                    state.fallbackTimer  = os.startTimer(3.1)
+                    stopAllSpeakers()
                     syncAudioEngine()
                     addLog("LOCKDOWN-ALARM aktiviert!")
                 elseif message == CFG.MSG_UNLOCK and state.lockdownActive then
                     state.lockdownActive = false
+                    stopAllSpeakers()
                     syncAudioEngine()
                     addLog("Lockdown beendet -> Vorheriger Modus.")
                 end
@@ -1422,17 +1658,25 @@ local function main()
                 end
 
             elseif protocol == CFG.STREAM_PROTOCOL and not state.updatingState then
-                if CFG.MODES[state.triggerMode] == "RADIO" and not state.emergencyActive and not state.lockdownActive then
-                    if type(message) == "table" and message.action == "radio_chunk" and message.chunk then
-                        state.curRadioTrackIdx = message.trackIdx or 1
-                        state.curRadioTitle    = message.trackTitle or "Radio-Track"
-                        local vol = (state.volumePct / 100) * 3.0
-                        if vol > 0.001 and #state.speakers > 0 then
-                            local ok, pcm = pcall(state.decoder, message.chunk)
-                            if ok and pcm then
-                                pushBufferToSpeakers(pcm, vol)
+                if type(message) == "table" then
+                    if message.action == "radio_chunk" and message.chunk then
+                        local sType = message.streamType or "radio"
+                        if sType == "emergency" or sType == "lockdown" then
+                            state.lastHostAlarmUtc = os.epoch("utc")
+                            if (sType == "emergency" and state.emergencyActive) or (sType == "lockdown" and state.lockdownActive) then
+                                state.stopLocalStream()
+                                state.enqueueRxChunk(message)
+                                state.dirty = true
                             end
+                        elseif CFG.MODES[state.triggerMode] == "RADIO" and not state.emergencyActive and not state.lockdownActive then
+                            state.curRadioTrackIdx = message.trackIdx or 1
+                            state.curRadioTitle    = message.trackTitle or "Radio-Track"
+                            state.enqueueRxChunk(message)
+                            state.dirty = true
                         end
+                    elseif message.action == "radio_stop" or message.action == "radio_alarm_end" then
+                        stopAllSpeakers()
+                        syncAudioEngine()
                         state.dirty = true
                     end
                 end
@@ -1461,10 +1705,17 @@ local function main()
                 end
             end
 
-        -- 7. Timer fuer Log-Ablauf, Lauftext-Marquee, Spieler-Detektor und Stream-Retry
+        -- 7. Timer fuer Sync-Playback, Fallback, Log-Ablauf, Lauftext-Marquee, Spieler-Detektor und Stream-Retry
         elseif ev == "timer" then
-            if p1 == state.tickTimer then
+            if p1 == state.syncTimer then
+                state.syncTimer = nil
+                state.processRxQueue()
+            elseif p1 == state.fallbackTimer then
+                state.fallbackTimer = nil
+                syncAudioEngine()
+            elseif p1 == state.tickTimer then
                 state.tickTimer = os.startTimer(0.5)
+                state.processRxQueue()
                 state.marqueeOffset = (state.marqueeOffset or 0) + 1
                 state.dirty = true
                 local t = now()
